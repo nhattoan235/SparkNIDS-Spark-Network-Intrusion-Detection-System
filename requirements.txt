@@ -1,0 +1,11 @@
+# Core runtime for the batch Spark ML project.
+pyspark[ml]==4.2.0
+PyYAML==6.0.3
+
+# Test runner used by every phase.
+pytest==8.4.2
+
+# Offline presentation dashboard (Phase 9).
+streamlit==1.63.0
+pandas==2.3.3
+altair==6.2.2

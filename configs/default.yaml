@@ -1,0 +1,134 @@
+project:
+  name: "UNSW-NB15 Spark Intrusion Detection"
+  seed: 42
+
+spark:
+  app_name: "unsw-nb15-ids"
+  master: "local[2]"
+  log_level: "WARN"
+  settings:
+    spark.ui.enabled: "true"
+    spark.ui.port: "4040"
+    spark.sql.shuffle.partitions: "4"
+    spark.default.parallelism: "4"
+    spark.driver.memory: "2g"
+    spark.driver.host: "127.0.0.1"
+    spark.driver.bindAddress: "127.0.0.1"
+    # FileContext checkpointing calls winutils.exe on Windows. This manager uses
+    # Hadoop FileSystem and therefore honors the project's pure-Java local FS.
+    spark.sql.streaming.checkpointFileManagerClass: "org.apache.spark.sql.execution.streaming.checkpointing.FileSystemBasedCheckpointFileManager"
+
+paths:
+  raw: "data/raw"
+  bronze: "data/bronze"
+  silver: "data/silver"
+  samples: "data/samples"
+  models: "models"
+  outputs: "outputs"
+
+dataset:
+  name: "UNSW-NB15"
+  official_page: "https://research.unsw.edu.au/projects/unsw-nb15-dataset"
+  sample_rows_per_label: 100
+  files:
+    train:
+      filename: "UNSW_NB15_training-set.csv"
+      expected_rows: 175341
+      sha256: "bec7dd5ec88dc2a0ccc7a07879d338395ed7421750f675fd0339e07dfe0648fa"
+      mirror_url: "https://huggingface.co/datasets/Mouwiya/UNSW-NB15-small/resolve/main/UNSW_NB15_training-set.csv?download=true"
+    test:
+      filename: "UNSW_NB15_testing-set.csv"
+      expected_rows: 82332
+      sha256: "734fe6642edf758f7c94d7d9149426b49d202fe8e7bf0bef47392489c3c0a559"
+      mirror_url: "https://huggingface.co/datasets/Mouwiya/UNSW-NB15-small/resolve/main/UNSW_NB15_testing-set.csv?download=true"
+
+cleaning:
+  categorical_missing_token: "__unknown__"
+  require_nonnegative_numeric: true
+
+eda:
+  top_n: 15
+  correlation_top_n: 12
+
+modeling:
+  validation_fraction: 0.20
+  split_hash_buckets: 10000
+  features_col: "features"
+  numeric_vector_col: "numeric_features"
+  scaled_numeric_col: "scaled_numeric_features"
+  pipeline_smoke_max_iter: 1
+
+baseline_logistic_regression:
+  max_iter: 50
+  reg_param: 0.0
+  elastic_net_param: 0.0
+  tolerance: 0.000001
+  fit_intercept: true
+  threshold_selection_metric: "f1"
+  threshold_candidates:
+    - 0.10
+    - 0.15
+    - 0.20
+    - 0.25
+    - 0.30
+    - 0.35
+    - 0.40
+    - 0.45
+    - 0.50
+    - 0.55
+    - 0.60
+    - 0.65
+    - 0.70
+    - 0.75
+    - 0.80
+    - 0.85
+    - 0.90
+
+model_comparison:
+  selection_metric: "f1"
+  class_weight_column: "class_weight"
+  random_forest_candidates:
+    - name: "random_forest_depth8"
+      num_trees: 30
+      max_depth: 8
+      max_bins: 32
+      min_instances_per_node: 2
+      feature_subset_strategy: "sqrt"
+      subsampling_rate: 0.8
+    - name: "random_forest_depth12"
+      num_trees: 50
+      max_depth: 12
+      max_bins: 32
+      min_instances_per_node: 2
+      feature_subset_strategy: "sqrt"
+      subsampling_rate: 0.8
+
+final_model:
+  name: "unsw_nb15_random_forest_binary"
+  source_candidate: "random_forest_depth12"
+  decision_threshold: 0.60
+  model_path: "models/final/pipeline"
+  metadata_path: "models/final/model_metadata.json"
+  official_test_path: "data/silver/test"
+
+benchmark:
+  warmup_runs: 1
+  measured_runs: 3
+  partition_counts:
+    - 1
+    - 2
+    - 4
+    - 8
+
+dashboard:
+  alerts_limit: 200
+  errors_limit_per_type: 50
+
+streaming:
+  input_root: "data/streaming_input"
+  output_root: "outputs/streaming"
+  demo_rows_per_batch: 20
+  initial_batch_count: 2
+  restart_batch_count: 1
+  max_files_per_trigger: 1
+  output_partitions: 1
