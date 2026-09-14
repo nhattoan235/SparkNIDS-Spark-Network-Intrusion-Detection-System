@@ -132,3 +132,18 @@ streaming:
   restart_batch_count: 1
   max_files_per_trigger: 1
   output_partitions: 1
+
+demo:
+  output_root: "outputs/demo"
+  mode: "demo"
+  sample_train_rows: 12000
+  sample_validation_rows: 3000
+  random_forest_num_trees: 12
+  random_forest_max_depth: 6
+  measured_runs: 2
+  partition_counts:
+    - 1
+    - 2
+    - 4
+  stream_rows_per_batch: 20
+  hold_seconds: 120

@@ -31,6 +31,7 @@ outputs/figures/*
 outputs/benchmarks/*
 outputs/dashboard/*
 outputs/streaming/*
+outputs/demo/*
 
 !data/**/.gitkeep
 !models/.gitkeep
