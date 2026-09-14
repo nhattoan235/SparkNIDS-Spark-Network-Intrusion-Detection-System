@@ -90,48 +90,61 @@ def _physical_memory_bytes() -> int | None:
     return int(status.total_physical) if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(status)) else None
 
 
-def _tracked_collect(spark: Any, query: DataFrame) -> tuple[list[Row], float, dict[str, Any]]:
-    group_id = f"phase8-evidence-{uuid.uuid4().hex[:10]}"
+def track_query_execution(
+    spark: Any,
+    query: DataFrame,
+    *,
+    description: str = "Spark representative query execution evidence",
+) -> tuple[list[Row], float, dict[str, Any]]:
+    """Collect a small result and return status-tracker Job/Stage/Task evidence."""
+    group_id = f"spark-evidence-{uuid.uuid4().hex[:10]}"
     context = spark.sparkContext
     tracker = context.statusTracker()
-    context.setJobGroup(group_id, "Phase 8 representative groupBy/orderBy evidence")
-    rows, duration = _timed_collect(query)
-    job_ids = sorted(int(value) for value in tracker.getJobIdsForGroup(group_id))
-    jobs = []
-    unique_stage_ids: set[int] = set()
-    for job_id in job_ids:
-        info = tracker.getJobInfo(job_id)
-        if info is None:
-            continue
-        stage_ids = [int(value) for value in info.stageIds]
-        unique_stage_ids.update(stage_ids)
-        jobs.append({"job_id": job_id, "status": str(info.status), "stage_ids": stage_ids})
-    stages = []
-    for stage_id in sorted(unique_stage_ids):
-        info = tracker.getStageInfo(stage_id)
-        if info is None:
-            continue
-        stages.append(
-            {
-                "stage_id": stage_id,
-                "name": str(info.name),
-                "num_tasks": int(info.numTasks),
-                "completed_tasks": int(info.numCompletedTasks),
-                "failed_tasks": int(info.numFailedTasks),
-            }
-        )
-    context.setLocalProperty("spark.jobGroup.id", None)
-    return rows, duration, {
-        "job_group_id": group_id,
-        "job_count": len(jobs),
-        "jobs": jobs,
-        "unique_stage_count": len(stages),
-        "stages": stages,
-        "total_tasks_across_unique_stages": sum(item["num_tasks"] for item in stages),
-        "completed_tasks_across_unique_stages": sum(item["completed_tasks"] for item in stages),
-        "failed_tasks_across_unique_stages": sum(item["failed_tasks"] for item in stages),
-        "stages_with_completed_tasks": sum(1 for item in stages if item["completed_tasks"]),
-    }
+    context.setJobGroup(group_id, description)
+    try:
+        rows, duration = _timed_collect(query)
+        job_ids = sorted(int(value) for value in tracker.getJobIdsForGroup(group_id))
+        jobs = []
+        unique_stage_ids: set[int] = set()
+        for job_id in job_ids:
+            info = tracker.getJobInfo(job_id)
+            if info is None:
+                continue
+            stage_ids = [int(value) for value in info.stageIds]
+            unique_stage_ids.update(stage_ids)
+            jobs.append({"job_id": job_id, "status": str(info.status), "stage_ids": stage_ids})
+        stages = []
+        for stage_id in sorted(unique_stage_ids):
+            info = tracker.getStageInfo(stage_id)
+            if info is None:
+                continue
+            stages.append(
+                {
+                    "stage_id": stage_id,
+                    "name": str(info.name),
+                    "num_tasks": int(info.numTasks),
+                    "completed_tasks": int(info.numCompletedTasks),
+                    "failed_tasks": int(info.numFailedTasks),
+                }
+            )
+        return rows, duration, {
+            "job_group_id": group_id,
+            "job_count": len(jobs),
+            "jobs": jobs,
+            "unique_stage_count": len(stages),
+            "stages": stages,
+            "total_tasks_across_unique_stages": sum(item["num_tasks"] for item in stages),
+            "completed_tasks_across_unique_stages": sum(item["completed_tasks"] for item in stages),
+            "failed_tasks_across_unique_stages": sum(item["failed_tasks"] for item in stages),
+            "stages_with_completed_tasks": sum(1 for item in stages if item["completed_tasks"]),
+        }
+    finally:
+        context.setLocalProperty("spark.jobGroup.id", None)
+
+
+def _tracked_collect(spark: Any, query: DataFrame) -> tuple[list[Row], float, dict[str, Any]]:
+    """Backward-compatible Phase 8 wrapper around the public evidence helper."""
+    return track_query_execution(spark, query, description="Phase 8 representative groupBy/orderBy evidence")
 
 
 def _format_benchmark(spark: Any, *, csv_path: Path, parquet_path: Path, warmups: int, runs: int) -> dict[str, Any]:

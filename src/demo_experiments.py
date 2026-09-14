@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import time
+import uuid
 from pathlib import Path
 from typing import Any
 
 from pyspark.sql import DataFrame, SparkSession
-from pyspark.sql import functions as F
 
-from src.benchmark import _format_benchmark, representative_query
+from src.benchmark import _format_benchmark, representative_query, result_signature, track_query_execution
 
 
 def summarize_data(dataframe: DataFrame) -> dict[str, Any]:
@@ -86,3 +87,103 @@ def build_representative_query(dataframe: DataFrame) -> DataFrame:
 def count_exchange_nodes(dataframe: DataFrame) -> int:
     """Count Exchange nodes in Spark's currently reported physical plan."""
     return dataframe._jdf.queryExecution().executedPlan().toString().count("Exchange")
+
+
+def run_lazy_evaluation_demo(spark: SparkSession, dataframe: DataFrame) -> dict[str, Any]:
+    """Show that transformations build a plan and an action creates a Job."""
+    group_id = f"guided-lazy-{uuid.uuid4().hex[:10]}"
+    context = spark.sparkContext
+    tracker = context.statusTracker()
+    query = build_representative_query(dataframe)
+    execution = query._jdf.queryExecution()
+    context.setJobGroup(group_id, "Guided demo lazy evaluation")
+    try:
+        before = sorted(int(value) for value in tracker.getJobIdsForGroup(group_id))
+        logical_plan = execution.logical().toString()
+        optimized_plan = execution.optimizedPlan().toString()
+        physical_plan = execution.executedPlan().toString()
+        started = time.perf_counter()
+        rows = query.collect()
+        action_seconds = time.perf_counter() - started
+        after = sorted(int(value) for value in tracker.getJobIdsForGroup(group_id))
+        return {
+            "flow": {
+                "input": "DataFrame đã đọc",
+                "spark": "filter + groupBy + aggregate + orderBy (chưa chạy)",
+                "result": "collect() mới kích hoạt Job",
+            },
+            "metrics": [
+                {"label": "Job trước action", "value": str(len(before))},
+                {"label": "Job sau action", "value": str(len(after))},
+                {"label": "Action", "value": f"{action_seconds:.3f}s"},
+            ],
+            "explanation": (
+                "Các transformation chỉ tạo kế hoạch. Khi gọi action như collect(), "
+                "Spark mới tối ưu plan và gửi Job xuống executor."
+            ),
+            "evidence": {
+                "job_group_id": group_id,
+                "job_ids_before_action": before,
+                "job_ids_after_action": after,
+                "logical_plan": logical_plan,
+                "optimized_plan": optimized_plan,
+                "physical_plan": physical_plan,
+                "result_sha256": result_signature(rows),
+            },
+            "job_ids_before_action": before,
+            "job_ids_after_action": after,
+            "result_rows": len(rows),
+            "action_seconds": action_seconds,
+            "logical_plan": logical_plan,
+            "optimized_plan": optimized_plan,
+            "physical_plan": physical_plan,
+        }
+    finally:
+        context.setLocalProperty("spark.jobGroup.id", None)
+
+
+def run_execution_demo(spark: SparkSession, dataframe: DataFrame) -> dict[str, Any]:
+    """Collect the Job/Stage/Task/Exchange evidence for the representative query."""
+    query = build_representative_query(dataframe)
+    execution = query._jdf.queryExecution()
+    logical_plan = execution.logical().toString()
+    optimized_plan = execution.optimizedPlan().toString()
+    rows, action_seconds, tracker = track_query_execution(
+        spark,
+        query,
+        description="Guided demo Job Stage Task Exchange evidence",
+    )
+    physical_plan = execution.executedPlan().toString()
+    exchange_nodes = physical_plan.count("Exchange")
+    return {
+        "flow": {
+            "input": "Các input partition của DataFrame",
+            "spark": "Job → Stage → Task; Exchange tạo shuffle",
+            "result": "Bằng chứng thực thi từ status tracker",
+        },
+        "metrics": [
+            {"label": "Job", "value": str(tracker["job_count"])},
+            {"label": "Stage", "value": str(tracker["unique_stage_count"])},
+            {"label": "Task hoàn tất", "value": str(tracker["completed_tasks_across_unique_stages"])},
+        ],
+        "explanation": (
+            "groupBy/orderBy là wide transformation nên dữ liệu phải qua Exchange/shuffle. "
+            "Spark chia phần việc thành Stage và mỗi partition tạo Task."
+        ),
+        "evidence": {
+            "logical_plan": logical_plan,
+            "optimized_plan": optimized_plan,
+            "physical_plan": physical_plan,
+            "shuffle_exchange_nodes": exchange_nodes,
+            "status_tracker": tracker,
+            "result_sha256": result_signature(rows),
+        },
+        "input_partitions": int(dataframe.rdd.getNumPartitions()),
+        "output_aggregate_rows": len(rows),
+        "action_seconds": action_seconds,
+        "shuffle_exchange_nodes": exchange_nodes,
+        "status_tracker": tracker,
+        "logical_plan": logical_plan,
+        "optimized_plan": optimized_plan,
+        "physical_plan": physical_plan,
+    }
