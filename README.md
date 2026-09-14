@@ -239,7 +239,7 @@ Artifact:
 - `docs/SPARK_EXECUTION_AND_BENCHMARK.md`: giải thích Partition → Task → Stage →
   Job, shuffle, cache và giới hạn benchmark.
 
-## Dashboard trình bày — Phase 9
+## Dashboard guided demo — Phase 9
 
 Tạo lại gói dữ liệu nhỏ cho dashboard từ các artifact đã có:
 
@@ -247,23 +247,44 @@ Tạo lại gói dữ liệu nhỏ cho dashboard từ các artifact đã có:
 .\.venv\Scripts\python.exe -m src.export_dashboard_data
 ```
 
-Khởi động dashboard offline bằng một lệnh:
+Khởi động dashboard offline bằng:
 
 ```powershell
 .\.venv\Scripts\streamlit.exe run dashboard\app.py
 ```
 
-Mở `http://127.0.0.1:8501`. Bốn trang gồm Tổng quan, Mô hình, Cảnh báo và
-Spark benchmark. Ứng dụng không khởi tạo Spark và không đọc Parquet/CSV lớn;
-nó chỉ đọc JSON aggregate cùng tối đa 200 cảnh báo, 50 false positive và 50
-false negative đã đóng gói. Xem hướng dẫn và giới hạn tại
-`docs/DASHBOARD_GUIDE.md`.
+Mở `http://127.0.0.1:8501`. Dashboard guided demo có 7 bước theo một flow
+`Input → Spark xử lý → Kết quả`: dữ liệu/schema, CSV/Parquet, lazy evaluation,
+Job/Stage/Task, cache, MLlib Random Forest và Structured Streaming.
+Ứng dụng không khởi tạo Spark và không đọc Parquet/CSV lớn; nó chỉ đọc status
+JSON nhỏ của runner hoặc artifact fallback đã export. Spark UI được mở tại
+`http://127.0.0.1:4040` trong lúc runner còn giữ SparkSession. Xem hướng dẫn và
+giới hạn tại `docs/DASHBOARD_GUIDE.md`.
 
 Artifact:
 
 - `outputs/dashboard/manifest.json`: data contract và đường dẫn nguồn nhỏ.
 - `outputs/dashboard/alerts_sample.json`: mẫu cảnh báo/sai số có giới hạn.
 - `dashboard/app.py`: ứng dụng Streamlit chạy không cần Internet.
+
+## Guided Spark demo
+
+Runner tạo bằng chứng Spark thật theo từng bước và ghi vào `outputs/demo/`:
+
+```powershell
+.\scripts\run_demo.ps1
+```
+
+Có thể chạy từng bước để kiểm tra hoặc giảng giải riêng:
+
+```powershell
+.\.venv\Scripts\python.exe -m src.spark_demo --step execution --hold-seconds 120
+```
+
+Runner có `--mode demo|full`, `--step all|data|parquet|lazy|execution|cache|mllib|streaming`.
+Demo MLlib dùng sample modeling và không chạy lại official test; streaming dùng
+file-source micro-batch để chứng minh checkpoint/restart. Kịch bản chi tiết nằm
+ở `docs/KICH_BAN_DEMO.md`.
 
 ## Structured Streaming mô phỏng — Phase 10
 

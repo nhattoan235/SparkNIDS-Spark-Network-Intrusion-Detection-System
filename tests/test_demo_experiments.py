@@ -6,7 +6,7 @@ import csv
 import json
 from pathlib import Path
 
-from src.demo_experiments import run_format_comparison, summarize_data
+from src.demo_experiments import run_cache_demo, run_format_comparison, summarize_data
 from src.demo_experiments import run_execution_demo, run_lazy_evaluation_demo
 from src.spark_session import create_spark_session
 from src.unsw_nb15_schema import EXPECTED_COLUMNS
@@ -91,6 +91,26 @@ def test_execution_demo_reports_jobs_stages_tasks_and_shuffle() -> None:
         assert result["status_tracker"]["total_tasks_across_unique_stages"] >= 1
         assert result["status_tracker"]["failed_tasks_across_unique_stages"] == 0
         assert all("num_tasks" in stage for stage in result["status_tracker"]["stages"])
+        json.dumps(result)
+    finally:
+        spark.stop()
+
+
+def test_cache_demo_separates_materialization_from_reuse_and_unpersists() -> None:
+    spark = create_spark_session(app_name="guided-demo-cache-test")
+    try:
+        source = _representative_frame(spark)
+        result = run_cache_demo(spark, source, runs=2)
+
+        assert result["identical_results"] is True
+        assert result["without_cache"]["total_seconds"] >= 0
+        assert result["with_cache"]["total_seconds"] >= 0
+        assert result["cache_materialization_seconds"] >= 0
+        assert result["cache_was_active"] is True
+        assert result["cache_is_active_after_cleanup"] is False
+        assert result["without_cache"]["result_sha256"] == result["with_cache"]["result_sha256"]
+        assert result["estimated_break_even_reuses"] is None or result["estimated_break_even_reuses"] >= 1
+        assert len(result["metrics"]) <= 3
         json.dumps(result)
     finally:
         spark.stop()

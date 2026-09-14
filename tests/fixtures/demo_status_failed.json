@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "run_id": "fixture-failed",
+  "mode": "demo",
+  "status": "failed",
+  "active_step": null,
+  "spark_ui_url": null,
+  "started_at": "2026-09-14T00:00:00+07:00",
+  "updated_at": "2026-09-14T00:01:00+07:00",
+  "steps": [
+    {"id": "data", "index": 1, "title": "Dữ liệu và schema", "status": "succeeded", "flow": {}, "metrics": [], "explanation": "", "evidence": {}},
+    {"id": "parquet", "index": 2, "title": "CSV và Parquet", "status": "failed", "flow": {}, "metrics": [], "explanation": "", "evidence": {}, "error": {"type": "FileNotFoundError", "message": "input missing", "recovery_hint": "run ingest"}},
+    {"id": "lazy", "index": 3, "title": "Lazy evaluation", "status": "pending", "flow": {}, "metrics": [], "explanation": "", "evidence": {}},
+    {"id": "execution", "index": 4, "title": "Job, Stage, Task", "status": "pending", "flow": {}, "metrics": [], "explanation": "", "evidence": {}},
+    {"id": "cache", "index": 5, "title": "Cache", "status": "pending", "flow": {}, "metrics": [], "explanation": "", "evidence": {}},
+    {"id": "mllib", "index": 6, "title": "MLlib Random Forest", "status": "pending", "flow": {}, "metrics": [], "explanation": "", "evidence": {}},
+    {"id": "streaming", "index": 7, "title": "Structured Streaming", "status": "pending", "flow": {}, "metrics": [], "explanation": "", "evidence": {}}
+  ],
+  "errors": [{"step_id": "parquet", "type": "FileNotFoundError", "message": "input missing", "recovery_hint": "run ingest"}]
+}

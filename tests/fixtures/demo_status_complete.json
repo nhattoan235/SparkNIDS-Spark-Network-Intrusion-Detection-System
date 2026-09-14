@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "run_id": "fixture-complete",
+  "mode": "demo",
+  "status": "succeeded",
+  "active_step": null,
+  "spark_ui_url": "http://127.0.0.1:4040",
+  "started_at": "2026-09-14T00:00:00+07:00",
+  "updated_at": "2026-09-14T00:01:00+07:00",
+  "steps": [
+    {"id": "data", "index": 1, "title": "Dữ liệu và schema", "status": "succeeded", "flow": {}, "metrics": [], "explanation": "", "evidence": {}},
+    {"id": "parquet", "index": 2, "title": "CSV và Parquet", "status": "succeeded", "flow": {}, "metrics": [], "explanation": "", "evidence": {}},
+    {"id": "lazy", "index": 3, "title": "Lazy evaluation", "status": "succeeded", "flow": {}, "metrics": [], "explanation": "", "evidence": {}},
+    {"id": "execution", "index": 4, "title": "Job, Stage, Task", "status": "succeeded", "flow": {}, "metrics": [], "explanation": "", "evidence": {}},
+    {"id": "cache", "index": 5, "title": "Cache", "status": "succeeded", "flow": {}, "metrics": [], "explanation": "", "evidence": {}},
+    {"id": "mllib", "index": 6, "title": "MLlib Random Forest", "status": "succeeded", "flow": {}, "metrics": [], "explanation": "", "evidence": {}},
+    {"id": "streaming", "index": 7, "title": "Structured Streaming", "status": "succeeded", "flow": {}, "metrics": [], "explanation": "", "evidence": {}}
+  ],
+  "errors": []
+}

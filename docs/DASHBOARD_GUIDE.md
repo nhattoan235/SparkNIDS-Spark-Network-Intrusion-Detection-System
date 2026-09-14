@@ -1,58 +1,101 @@
-# Hướng dẫn dashboard Phase 9
+# Hướng dẫn guided demo Apache Spark
 
-Dashboard dùng để trình bày kết quả nghiên cứu UNSW-NB15 đã sinh ở các phase
-trước. Đây không phải hệ thống giám sát mạng production và không bắt packet
-trực tiếp.
+Dashboard mới là màn hình thuyết trình cho đề tài **Xây dựng hệ thống phát hiện
+xâm nhập mạng trên dữ liệu lớn bằng Apache Spark MLlib**. Nó không bắt packet
+trực tiếp và không phải IDS production. Mục tiêu của dashboard là giúp người
+xem nhìn thấy rõ Spark nhận dữ liệu gì, xử lý gì và tạo ra kết quả gì.
 
-## Khởi động
+## Chạy demo
 
-Từ thư mục gốc `D:\Hoctap\big_data2`, nếu prediction hoặc metrics vừa thay đổi,
-tạo lại gói dashboard:
+Mở PowerShell tại thư mục:
 
 ```powershell
-.\.venv\Scripts\python.exe -m src.export_dashboard_data
+D:\Learning\bigdata\SparkNIDS-Spark-Network-Intrusion-Detection-System
 ```
 
-Sau đó chạy:
+Terminal 1 chạy Spark runner:
+
+```powershell
+.\scripts\run_demo.ps1
+```
+
+Runner sẽ ghi trạng thái vào `outputs/demo/`, giữ Spark UI sống trong thời gian
+được cấu hình và in URL Spark UI. Có thể chạy riêng một bước khi cần:
+
+```powershell
+.\.venv\Scripts\python.exe -m src.spark_demo --step execution --hold-seconds 120
+```
+
+Terminal 2 chạy giao diện:
 
 ```powershell
 .\.venv\Scripts\streamlit.exe run dashboard\app.py
 ```
 
-Mở `http://127.0.0.1:8501`. Dashboard chỉ dùng file cục bộ và vẫn demo được khi
-không có Internet.
+Mở:
 
-## Nội dung bốn trang
+- Dashboard: `http://127.0.0.1:8501`.
+- Spark UI: `http://127.0.0.1:4040` trong lúc runner còn giữ SparkSession.
 
-- **Tổng quan:** tổng flow, tỷ lệ Attack, protocol/service phổ biến, phân phối
-  nhãn và nhóm tấn công từ Silver train.
-- **Mô hình:** metrics official test, confusion matrix, so sánh candidate và các
-  operating point ROC/PR theo threshold validation. ROC-AUC/PR-AUC chính xác là
-  aggregate do Spark evaluator sinh; đường ROC/PR chỉ nối 17 threshold đã đo.
-- **Cảnh báo:** tối đa 200 prediction Attack có xác suất cao nhất, có bộ lọc
-  protocol, service và xác suất; thêm tối đa 50 false positive và 50 false
-  negative để phân tích lỗi.
-- **Spark benchmark:** kết quả CSV/Parquet, cache, partition và bằng chứng
-  Job/Stage/Task của Phase 8.
+Spark UI sẽ biến mất hoặc không còn dữ liệu truy cập được sau khi runner dừng
+SparkSession. Đây là hành vi bình thường của Spark local, không phải lỗi
+dashboard.
 
-## Data contract và giới hạn bộ nhớ
+## Bảy bước trên màn hình
 
-`outputs/dashboard/manifest.json` liệt kê các JSON nhỏ mà giao diện được phép
-đọc. `src.export_dashboard_data` dùng Spark để aggregate hoặc `limit().collect()`
-trước khi ghi JSON; nó không gọi `toPandas()` và kiểm tra số prediction nguồn
-khớp metrics Phase 7. `dashboard/app.py` không import PySpark, không đọc dataset
-Bronze/Silver và không đọc toàn bộ prediction Parquet.
+Dashboard có một thanh tiến trình ngang và nút `Quay lại`/`Tiếp theo`. Mỗi bước
+chỉ có một flow trung tâm:
 
-Mẫu cảnh báo có chủ đích bị giới hạn để dashboard phản hồi nhanh. Muốn suy luận
-dữ liệu mới, dùng `src.predict_batch` rồi chạy lại bước export; Phase 9 không có
-form dự đoán một record vì đây là hạng mục tùy chọn và việc khởi tạo Spark cho
-từng tương tác không phù hợp với chế độ demo offline nhẹ.
+`Input → Spark xử lý → Kết quả`
+
+1. **Dữ liệu và schema:** một dòng là network flow; label `0` là Normal, label
+   `1` là Attack; Spark DataFrame giữ schema 45 cột.
+2. **CSV và Parquet:** cùng một truy vấn aggregate được chạy trên hai format;
+   hash kết quả phải giống nhau, thời gian và dung lượng được đo trong điều
+   kiện hiện tại.
+3. **Lazy evaluation:** `filter`, `groupBy`, `orderBy` chỉ dựng kế hoạch; gọi
+   `collect()` mới tạo Job.
+4. **Job, Stage, Task:** xem số partition, status tracker và `Exchange` trong
+   physical plan để nối khái niệm Spark với Spark UI.
+5. **Cache:** tách chi phí materialize cache khỏi chi phí các lần reuse; cache
+   chỉ có lợi nếu cùng dữ liệu được dùng lại đủ nhiều.
+6. **MLlib Random Forest:** feature pipeline biến cột thành vector, sau đó
+   Random Forest phân loại Normal/Attack trên sample modeling.
+7. **Structured Streaming:** file Parquet đến theo micro-batch; checkpoint
+   giúp restart chỉ đọc file mới.
+
+Phần “Bằng chứng Spark” chỉ hiển thị các thông tin nhỏ như plan, Job/Stage/Task,
+pipeline stages, batch ID và restart checks. Dashboard không import PySpark,
+không đọc Bronze/Silver lớn và không gọi `toPandas()`.
+
+## Live artifact và fallback offline
+
+Runner ghi:
+
+- `outputs/demo/latest.json`: con trỏ tới run mới nhất.
+- `outputs/demo/runs/<run_id>/status.json`: trạng thái từng bước.
+- `outputs/demo/runtime/<run_id>/`: runtime streaming của run đó.
+
+Nếu chưa chạy runner, dashboard dùng các artifact Phase 3/6/8/10 đã export để
+trình bày offline. Nếu một status đang được thay thế hoặc một step lỗi, giao
+diện vẫn mở và hiển thị trạng thái/cách khắc phục thay vì crash.
+
+## Giới hạn cần nói rõ
+
+- Runner hiện dùng `local[2]`, tức một máy và một local executor; chưa chứng
+  minh network shuffle giữa nhiều worker.
+- CSV/Parquet, partition và cache chỉ được benchmark trên workload/máy hiện
+  tại; không được kết luận Spark luôn nhanh hơn trong mọi trường hợp.
+- Streaming là file-source mô phỏng micro-batch, chưa phải packet capture hoặc
+  Kafka realtime.
+- MLlib demo dùng sample để trình bày; official test được giữ riêng và không
+  chạy lại trong guided demo.
+- Model cuối vẫn là nghiên cứu trên UNSW-NB15; FPR official test cao nên chưa
+  được dùng làm bộ chặn production.
 
 ## Kiểm tra
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest tests\test_dashboard.py -q
+.\.venv\Scripts\python.exe -m pytest tests\test_spark_demo.py -q
 ```
-
-Test xác nhận bundle đầy đủ và có giới hạn, source không gọi `toPandas()`, đồng
-thời render cả bốn trang bằng Streamlit AppTest mà không phát sinh exception.

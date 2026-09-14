@@ -239,7 +239,7 @@ def run_available_now(
     }
 
 
-def _publish_demo_batch(
+def publish_demo_batch(
     spark: SparkSession,
     config: dict[str, Any],
     *,
@@ -287,13 +287,15 @@ def _read_recursive_parquet(spark: SparkSession, path: Path) -> DataFrame:
 
 
 def run_phase10_demo(
-    config_path: str | Path | None = None,
+    config_path: str | Path | dict[str, Any] | None = None,
     *,
     run_name: str | None = None,
     rows_per_batch: int | None = None,
+    input_root: str | Path | None = None,
+    output_root: str | Path | None = None,
 ) -> dict[str, Any]:
     """Run two arrivals, restart from checkpoint, then process a third arrival."""
-    config = load_config(config_path or PROJECT_ROOT / "configs" / "default.yaml")
+    config = config_path if isinstance(config_path, dict) else load_config(config_path or PROJECT_ROOT / "configs" / "default.yaml")
     streaming = config["streaming"]
     resolved_name = run_name or f"phase10-{datetime.now().strftime('%Y%m%dT%H%M%S')}-{uuid.uuid4().hex[:8]}"
     if not OUTPUT_NAME_PATTERN.fullmatch(resolved_name):
@@ -304,10 +306,10 @@ def run_phase10_demo(
     if batch_rows < 1 or initial_batch_count < 1 or restart_batch_count < 1:
         raise ValueError("Demo row and batch counts must be positive")
 
-    input_dir = _resolve_project_path(streaming["input_root"]) / resolved_name
-    output_root = _resolve_project_path(streaming["output_root"]) / resolved_name
-    checkpoint_dir = output_root / "checkpoint"
-    if input_dir.exists() or output_root.exists():
+    input_dir = _resolve_project_path(input_root or streaming["input_root"]) / resolved_name
+    resolved_output_root = _resolve_project_path(output_root or streaming["output_root"]) / resolved_name
+    checkpoint_dir = resolved_output_root / "checkpoint"
+    if input_dir.exists() or resolved_output_root.exists():
         raise FileExistsError(f"Streaming demo run already exists: {resolved_name}")
 
     published_rows: list[int] = []
@@ -315,7 +317,7 @@ def run_phase10_demo(
     try:
         for batch_index in range(initial_batch_count):
             published_rows.append(
-                _publish_demo_batch(
+                publish_demo_batch(
                     first_spark,
                     config,
                     input_dir=input_dir,
@@ -327,12 +329,12 @@ def run_phase10_demo(
             first_spark,
             config,
             input_dir=input_dir,
-            output_root=output_root,
+            output_root=resolved_output_root,
             checkpoint_dir=checkpoint_dir,
             query_name=f"{resolved_name}-query",
         )
-        first_predictions = _read_recursive_parquet(first_spark, output_root / "predictions").count()
-        first_summaries = _read_recursive_parquet(first_spark, output_root / "batch_summaries").count()
+        first_predictions = _read_recursive_parquet(first_spark, resolved_output_root / "predictions").count()
+        first_summaries = _read_recursive_parquet(first_spark, resolved_output_root / "batch_summaries").count()
         first_application_id = first_spark.sparkContext.applicationId
     finally:
         first_spark.stop()
@@ -341,7 +343,7 @@ def run_phase10_demo(
     try:
         for batch_index in range(initial_batch_count, initial_batch_count + restart_batch_count):
             published_rows.append(
-                _publish_demo_batch(
+                publish_demo_batch(
                     second_spark,
                     config,
                     input_dir=input_dir,
@@ -353,12 +355,12 @@ def run_phase10_demo(
             second_spark,
             config,
             input_dir=input_dir,
-            output_root=output_root,
+            output_root=resolved_output_root,
             checkpoint_dir=checkpoint_dir,
             query_name=f"{resolved_name}-query",
         )
-        predictions = _read_recursive_parquet(second_spark, output_root / "predictions").cache()
-        summaries = _read_recursive_parquet(second_spark, output_root / "batch_summaries").cache()
+        predictions = _read_recursive_parquet(second_spark, resolved_output_root / "predictions").cache()
+        summaries = _read_recursive_parquet(second_spark, resolved_output_root / "batch_summaries").cache()
         final_prediction_rows = predictions.count()
         distinct_ids = predictions.select("id").distinct().count()
         summary_rows = summaries.count()
@@ -427,9 +429,9 @@ def run_phase10_demo(
         },
         "batch_summaries": batch_summaries,
         "outputs": {
-            "root": str(output_root),
-            "predictions": str(output_root / "predictions"),
-            "batch_summaries": str(output_root / "batch_summaries"),
+            "root": str(resolved_output_root),
+            "predictions": str(resolved_output_root / "predictions"),
+            "batch_summaries": str(resolved_output_root / "batch_summaries"),
             "prediction_rows": final_prediction_rows,
             "distinct_ids": distinct_ids,
         },
@@ -438,8 +440,8 @@ def run_phase10_demo(
             "idempotence": "each deterministic batch_id overwrites only its own output directory",
         },
     }
-    output_root.mkdir(parents=True, exist_ok=True)
-    run_report = output_root / "report.json"
+    resolved_output_root.mkdir(parents=True, exist_ok=True)
+    run_report = resolved_output_root / "report.json"
     run_report.write_text(json.dumps(report, indent=2, ensure_ascii=False), encoding="utf-8")
     metrics_path = PROJECT_ROOT / config["paths"]["outputs"] / "metrics" / "phase10_streaming.json"
     metrics_path.parent.mkdir(parents=True, exist_ok=True)
