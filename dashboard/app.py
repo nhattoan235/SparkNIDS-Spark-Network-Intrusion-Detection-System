@@ -34,16 +34,17 @@ status_label = {
     "not_ready": "Đang chuẩn bị",
 }.get(status.get("status"), str(status.get("status", "—")))
 st.markdown(
-    f'<div class="guided-hero"><div><div class="guided-kicker">Apache Spark · UNSW-NB15 · IDS</div>'
-    f'<h1>Nhìn thấy Spark đang làm gì</h1><p>Đi qua một network flow từ dữ liệu vào đến cảnh báo Attack.</p></div>'
-    f'<div class="guided-status"><strong>{status_label}</strong>{run_label}<br><span>7 bước trình bày</span></div></div>',
+    f'<div class="lab-hero"><div class="lab-brand">SPARK IDS LAB <span>UNSW-NB15</span></div>'
+    f'<div class="lab-hero-row"><div><h1>Một flow mạng đi qua Spark như thế nào?</h1>'
+    f'<p class="hero-explainer">Flow là một bản ghi tóm tắt một lượt giao tiếp mạng.</p></div>'
+    f'<div class="run-stamp"><small>TRẠNG THÁI</small><strong>{status_label}</strong><span>{run_label}</span></div></div></div>',
     unsafe_allow_html=True,
 )
 if status.get("fallback"):
-    st.info("Đang hiển thị artifact offline đã export. Chạy runner để xem bằng chứng Spark live và mở Spark UI.")
+    st.info("Đang dùng dữ liệu của lần chạy gần nhất.")
 elif status.get("status") == "running":
-    st.caption("Runner đang cập nhật artifact. Tải lại trang sau mỗi step để xem số liệu mới.")
+    st.caption("Spark đang cập nhật số liệu.")
 elif status.get("status") == "not_ready":
-    st.warning("Runner chưa tạo status hoàn chỉnh; đang chờ artifact hợp lệ.")
+    st.warning("Chưa có dữ liệu chạy demo.")
 
 render_guided_demo(status)
