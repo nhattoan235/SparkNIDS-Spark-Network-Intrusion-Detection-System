@@ -1,0 +1,24 @@
+services:
+  victim:
+    build: .
+    command: ["python", "victim.py"]
+    restart: unless-stopped
+    volumes:
+      - ../data/lab/incoming:/lab/incoming
+    networks:
+      - isolated
+
+  generator:
+    build: .
+    entrypoint: ["python", "generator.py"]
+    command: ["normal"]
+    profiles: ["run"]
+    volumes:
+      - ../data/lab/truth:/lab/truth
+      - ../data/lab/control:/lab/control
+    networks:
+      - isolated
+
+networks:
+  isolated:
+    internal: true

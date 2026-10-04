@@ -313,6 +313,16 @@ mới nhất nằm tại `outputs/metrics/phase10_streaming.json`.
 Các file Parquet đầu vào phải có schema UNSW-NB15 và được đặt nguyên tử vào thư
 mục nguồn. Xem quy trình, data contract và giới hạn tại docs/STREAMING_GUIDE.md.
 
+## Live Lab với traffic Docker
+
+Đồ án có thêm một lab thực hành riêng: Docker tạo traffic TCP cô lập, Spark
+Structured Streaming đọc flow mới, gom số liệu theo lượt và Spark MLlib phân
+loại lượt đó. Mô hình lab được huấn luyện bằng các lượt Docker có nhãn được giữ
+riêng; mô hình UNSW-NB15 và official test tiếp tục được báo cáo độc lập.
+
+Hướng dẫn cài đặt, lệnh chạy theo thứ tự, cách đọc dashboard và giới hạn đo nằm
+tại [docs/LIVE_LAB_GUIDE.md](docs/LIVE_LAB_GUIDE.md).
+
 ## Báo cáo và demo — Phase 11
 
 Tài liệu nghiệm thu cuối đã tổng hợp kiến trúc, data lineage, chống leakage,

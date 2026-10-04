@@ -24,6 +24,9 @@ data/raw/*
 data/bronze/*
 data/silver/*
 data/streaming_input/*
+data/lab/incoming/
+data/lab/truth/
+data/lab/control/
 models/*
 outputs/metrics/*
 outputs/predictions/*
@@ -32,6 +35,7 @@ outputs/benchmarks/*
 outputs/dashboard/*
 outputs/streaming/*
 outputs/demo/*
+outputs/live_lab/
 
 !data/**/.gitkeep
 !models/.gitkeep
