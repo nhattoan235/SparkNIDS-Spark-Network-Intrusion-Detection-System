@@ -3,15 +3,19 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import random
 import shutil
 import subprocess
+import sys
 import time
 import uuid
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
+
+from lab.generator import LIVE_LABELS, LIVE_NAMES, LIVE_RATES
 
 
 SENDER_IDS = tuple(f"sender-{index:02d}" for index in range(1, 16))
@@ -64,6 +68,9 @@ class LiveLabController:
         self._container_names: dict[str, str] = {}
         self._experiment_id: str | None = None
         self._stopped = False
+        self._stream_process = None
+        self._preparation_process = None
+        self._scale_process = None
 
     @property
     def active(self) -> bool:
@@ -176,6 +183,8 @@ class LiveLabController:
         manifest = self.manifest(experiment_id)
         if not manifest:
             return {}
+        if manifest.get("kind") == "live":
+            return self._live_status(manifest)
 
         # ponytail: the lab retains only a few hundred events; use checkpointed counters if runs grow large.
         observed = Counter()
@@ -213,6 +222,18 @@ class LiveLabController:
             self._clear_gate(experiment_id)
         self._write_manifest(manifest)
         return manifest
+
+    def latest_live_experiment_id(self) -> str | None:
+        """Recover the newest interactive run when a browser or app session reloads."""
+        if not self.experiments_dir.is_dir():
+            return None
+        candidates = []
+        for path in self.experiments_dir.glob("*.json"):
+            manifest = self.manifest(path.stem)
+            if manifest.get("kind") != "live" or manifest.get("lab_mode") != "live":
+                continue
+            candidates.append((str(manifest.get("created_at", "")), path.stat().st_mtime_ns, path.stem))
+        return max(candidates)[2] if candidates else None
 
     def stop(self, experiment_id: str | None = None) -> None:
         experiment_id = experiment_id or self._experiment_id
@@ -320,7 +341,163 @@ class LiveLabController:
         return path.read_text(encoding="utf-8", errors="replace")[-500:].strip() or actor_id
 
     def _write_manifest(self, manifest: dict) -> None:
+        self.experiments_dir.mkdir(parents=True, exist_ok=True)
         path = self.experiments_dir / f"{manifest['experiment_id']}.json"
         temporary = path.with_suffix(".tmp")
         temporary.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
         temporary.replace(path)
+
+    def set_behavior(self, experiment_id: str, actor_id: str, profile: str, rate: float) -> None:
+        manifest = self.manifest(experiment_id)
+        actors = {row["actor_id"] for row in manifest.get("senders", [])}
+        if not manifest or not re_valid_experiment(experiment_id) or actor_id not in actors:
+            raise ValueError("Máy không thuộc lượt đang chạy.")
+        if profile not in {*LIVE_LABELS, "auto"} or not math.isfinite(rate) or not 0.2 <= rate <= 25:
+            raise ValueError("Chọn hành vi hợp lệ và tốc độ từ 0.2 đến 25 kết nối/giây.")
+        self.control_dir.mkdir(parents=True, exist_ok=True)
+        path = self.control_dir / f"{experiment_id}.{actor_id}.json"
+        if profile == "auto":
+            path.unlink(missing_ok=True)
+            return
+        temporary = path.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"profile": profile, "rate": float(rate), "changed_at": time.time()}), encoding="utf-8")
+        temporary.replace(path)
+        manifest.setdefault("changes", []).append({"actor_id": actor_id, "profile": profile, "rate": rate,
+            "at": datetime.now(timezone.utc).isoformat()})
+        self._write_manifest(manifest)
+
+    def start_live(self, *, duration: int = 90, seed: int = 42, automatic: bool = True,
+                   lab_mode: str = "live", build: bool = True) -> str:
+        if self.active:
+            raise RuntimeError("Lượt trước vẫn đang gửi traffic.")
+        if lab_mode not in {"live", "window_train", "window_validation", "window_test"} or not 10 <= duration <= 600:
+            raise ValueError("Thời lượng hợp lệ: 10–600 giây.")
+        if lab_mode == "live" and not (self.root / "models/live_lab/window_pipeline").is_dir():
+            raise FileNotFoundError("Cần chuẩn bị mô hình cửa sổ trước khi chạy lab.")
+        experiment_id = uuid.uuid4().hex[:12]
+        self._experiment_id = experiment_id
+        self._stopped = False
+        self._processes.clear()
+        self._container_names.clear()
+        for directory in (self.control_dir, self.truth_dir, self.experiments_dir, self.logs_dir):
+            directory.mkdir(parents=True, exist_ok=True)
+        rows = [{"actor_id": actor, "scenario": "normal", "status": "Đang chuẩn bị"} for actor in SENDER_IDS]
+        self._write_manifest({"experiment_id": experiment_id, "kind": "live", "lab_mode": lab_mode,
+            "automatic": automatic, "seed": seed, "duration": duration, "status": "preparing",
+            "created_at": datetime.now(timezone.utc).isoformat(), "senders": rows})
+        try:
+            if build:
+                self._compose("build", "generator", "victim", timeout=300)
+            self._compose("up", "-d", "victim", timeout=90)
+            for actor in SENDER_IDS:
+                container = f"sparkids-{experiment_id}-{actor}"
+                self._container_names[actor] = container
+                command = [*self._compose_args(), "run", "--rm", "--name", container, "generator", "live",
+                    "--actor-id", actor, "--experiment-id", experiment_id, "--lab-mode", lab_mode,
+                    "--duration", str(duration), "--seed", str(seed), "--wait-for-start"]
+                if automatic:
+                    command.append("--automatic")
+                with (self.logs_dir / f"{experiment_id}-{actor}.log").open("w", encoding="utf-8") as log:
+                    self._processes[actor] = subprocess.Popen(command, cwd=self.root, stdout=log,
+                        stderr=subprocess.STDOUT, text=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+            self._wait_until_ready(experiment_id, 90)
+            start_at = math.ceil((time.time() + 1) / 10) * 10
+            gate = self.control_dir / f"{experiment_id}.go"
+            temporary = gate.with_suffix(".tmp")
+            temporary.write_text(json.dumps({"start_at": start_at}), encoding="utf-8")
+            temporary.replace(gate)
+            manifest = self.manifest(experiment_id)
+            manifest.update(status="running", started_at=datetime.fromtimestamp(start_at, timezone.utc).isoformat())
+            self._write_manifest(manifest)
+            return experiment_id
+        except Exception as error:
+            self._stop_processes(experiment_id)
+            self._remove_containers()
+            manifest = self.manifest(experiment_id)
+            manifest.update(status="failed", error=str(error))
+            self._write_manifest(manifest)
+            raise
+
+    def _live_status(self, manifest: dict) -> dict:
+        experiment_id = manifest["experiment_id"]
+        finished = True
+        failed = False
+        for row in manifest["senders"]:
+            path = self.control_dir / f"{experiment_id}.{row['actor_id']}.status.json"
+            try:
+                row.update(json.loads(path.read_text(encoding="utf-8")))
+            except (OSError, ValueError):
+                pass
+            process = self._processes.get(row["actor_id"])
+            code = process.poll() if process else None
+            if self._stopped:
+                row["status"] = "Đã dừng"
+            elif process and code is None:
+                row["status"] = "Đang gửi" if row.get("sent") else "Chờ bắt đầu"
+                finished = False
+            elif code == 0:
+                row["status"] = "Hoàn tất"
+            elif process:
+                row["status"] = f"Lỗi ({code})"
+                failed = True
+            elif manifest["status"] == "running":
+                row["status"] = "Không còn quản lý tiến trình"
+                failed = True
+        if finished and manifest["status"] == "running":
+            manifest.update(status="stopped" if self._stopped else "failed" if failed else "completed",
+                finished_at=datetime.now(timezone.utc).isoformat())
+            self._clear_gate(experiment_id)
+        self._write_manifest(manifest)
+        return manifest
+
+    def ensure_stream(self) -> None:
+        progress = self.root / "outputs/live_lab/windows/progress.json"
+        try:
+            report = json.loads(progress.read_text(encoding="utf-8"))
+            if report.get("status") == "running" and time.time() - report.get("heartbeat", 0) < 20:
+                return
+        except (OSError, ValueError):
+            pass
+        if self._stream_process and self._stream_process.poll() is None:
+            return
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        python = self.root / ".venv/Scripts/python.exe"
+        if not python.is_file():
+            python = self.root / ".venv/bin/python"
+        with (self.logs_dir / "spark-windows.log").open("a", encoding="utf-8") as log:
+            self._stream_process = subprocess.Popen([str(python), "-m", "src.lab_stream"], cwd=self.root,
+                stdout=log, stderr=subprocess.STDOUT, text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+
+    def prepare_window_model(self) -> None:
+        if self._preparation_process and self._preparation_process.poll() is None:
+            return
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        report_path = self.root / "outputs/live_lab/preparation.json"
+        report_path.parent.mkdir(parents=True, exist_ok=True)
+        temporary = report_path.with_suffix(".tmp")
+        temporary.write_text(json.dumps({"status": "starting", "updated_at": time.time()}), encoding="utf-8")
+        temporary.replace(report_path)
+        python = self.root / ".venv/Scripts/python.exe"
+        if not python.is_file():
+            python = self.root / ".venv/bin/python"
+        with (self.logs_dir / "window-model-preparation.log").open("a", encoding="utf-8") as log:
+            self._preparation_process = subprocess.Popen([str(python), "-m", "src.lab_window_model",
+                "--collect", "--duration", "50"], cwd=self.root, stdout=log, stderr=subprocess.STDOUT,
+                text=True, creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+
+    def start_scale(self) -> None:
+        if self._scale_process and self._scale_process.poll() is None:
+            return
+        self.logs_dir.mkdir(parents=True, exist_ok=True)
+        python = self.root / ".venv/Scripts/python.exe"
+        if not python.is_file():
+            python = self.root / ".venv/bin/python"
+        with (self.logs_dir / "unsw-scale-benchmark.log").open("a", encoding="utf-8") as log:
+            self._scale_process = subprocess.Popen([str(python), "-m", "src.lab_scale"], cwd=self.root,
+                stdout=log, stderr=subprocess.STDOUT, text=True,
+                creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0)
+
+
+def re_valid_experiment(value: str) -> bool:
+    return len(value) == 12 and all(char in "0123456789abcdef" for char in value)

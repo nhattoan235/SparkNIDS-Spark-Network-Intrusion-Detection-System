@@ -8,6 +8,7 @@ import json
 import pytest
 from streamlit.testing.v1 import AppTest
 
+import dashboard.data_access as dashboard_data_access
 from dashboard.data_access import (
     PROJECT_ROOT,
     load_dashboard_bundle,
@@ -48,8 +49,38 @@ def test_each_step_view_has_a_short_teaching_story() -> None:
         assert len(view["ids_link"]) <= 180
 
 
-def test_dashboard_bundle_is_offline_and_bounded() -> None:
-    bundle = load_dashboard_bundle()
+def test_dashboard_bundle_is_offline_and_bounded(tmp_path: Path) -> None:
+    alerts = {
+        "alerts": [],
+        "false_positives": [],
+        "false_negatives": [],
+        "limits": {"alerts": 200, "errors_per_type": 50},
+        "collection_policy": {"full_prediction_dataset_collected": False, "to_pandas_used": False},
+    }
+    artifact_paths = {}
+    for name, value in {
+        "eda": {},
+        "model_comparison": {},
+        "final_test_metrics": {},
+        "benchmark": {},
+        "alerts": alerts,
+    }.items():
+        path = tmp_path / f"{name}.json"
+        path.write_text(json.dumps(value), encoding="utf-8")
+        artifact_paths[name] = str(path)
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            {
+                "offline_ready": True,
+                "large_dataset_loaded_by_dashboard": False,
+                "artifacts": artifact_paths,
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    bundle = load_dashboard_bundle(manifest_path)
     manifest = bundle["manifest"]
     alerts = bundle["alerts"]
 
@@ -69,7 +100,10 @@ def test_dashboard_source_never_calls_spark_to_pandas() -> None:
 
 
 def test_streamlit_app_renders_without_exception() -> None:
-    app = AppTest.from_file(str(Path(PROJECT_ROOT) / "dashboard" / "app.py"), default_timeout=30).run()
+    app = AppTest.from_file(
+        str(Path(PROJECT_ROOT) / "dashboard" / "pages" / "02_Spark_Guided_Demo.py"),
+        default_timeout=30,
+    ).run()
 
     assert not app.exception
     assert app.title or app.markdown
@@ -139,13 +173,21 @@ def test_load_demo_status_rejects_path_outside_demo_root(tmp_path: Path) -> None
         load_demo_status(demo_root)
 
 
-def test_static_fallback_contains_seven_steps() -> None:
+def test_static_fallback_contains_seven_pending_steps_when_artifacts_are_missing(monkeypatch) -> None:
+    monkeypatch.setattr(
+        dashboard_data_access,
+        "load_dashboard_bundle",
+        lambda: (_ for _ in ()).throw(FileNotFoundError("fixture has no exported artifacts")),
+    )
+
     status = load_static_demo_fallback()
 
-    assert status["fallback"] is True
+    assert status["status"] == "not_ready"
+    assert status["fallback"] is False
     assert [step["id"] for step in status["steps"]] == [
         "data", "parquet", "lazy", "execution", "cache", "mllib", "streaming"
     ]
+    assert all(step["status"] == "pending" for step in status["steps"])
 
 
 def test_guided_renderer_does_not_use_generic_metric_cards() -> None:
@@ -200,8 +242,27 @@ def test_execution_view_does_not_turn_missing_tracker_into_zero() -> None:
 
 
 def test_tables_use_clear_time_labels_and_keep_lazy_duration_separate() -> None:
-    status = load_demo_status()
-    views = {step["id"]: build_step_view(step) for step in status["steps"]}
+    steps = [
+        {
+            "id": "parquet",
+            "result": {
+                "benchmark": {
+                    "csv": {"timing": {"median_seconds": 0.5}, "size_bytes": 2_000_000},
+                    "parquet": {"timing": {"median_seconds": 0.3}, "size_bytes": 1_000_000},
+                }
+            },
+        },
+        {"id": "lazy", "result": {"job_ids_before_action": [], "job_ids_after_action": [1], "action_seconds": 0.2}},
+        {
+            "id": "cache",
+            "result": {
+                "without_cache": {"median_seconds": 0.5},
+                "with_cache": {"median_seconds": 0.3},
+                "cache_materialization_seconds": 0.7,
+            },
+        },
+    ]
+    views = {step["id"]: build_step_view(step) for step in steps}
 
     parquet = views["parquet"]
     assert "Thời gian chạy" in parquet["result_table"][0]
@@ -309,7 +370,7 @@ def test_ids_steps_name_sample_and_file_simulation() -> None:
 
 
 def test_execution_step_shows_what_job_stage_task_do() -> None:
-    app = AppTest.from_file(str(PROJECT_ROOT / "dashboard" / "app.py"), default_timeout=30)
+    app = AppTest.from_file(str(PROJECT_ROOT / "dashboard" / "pages" / "02_Spark_Guided_Demo.py"), default_timeout=30)
     app.session_state.demo_step = 3
     app.run()
 
@@ -321,7 +382,7 @@ def test_execution_step_shows_what_job_stage_task_do() -> None:
 
 
 def test_execution_step_shows_a_conceptual_diagram_before_measured_counts() -> None:
-    app = AppTest.from_file(str(PROJECT_ROOT / "dashboard" / "app.py"), default_timeout=30)
+    app = AppTest.from_file(str(PROJECT_ROOT / "dashboard" / "pages" / "02_Spark_Guided_Demo.py"), default_timeout=30)
     app.session_state.demo_step = 3
     app.run()
 

@@ -7,6 +7,7 @@ from collections import Counter
 import pytest
 
 from dashboard import live_lab_controller
+from dashboard import live_view
 from lab import generator as lab_generator
 from lab.generator import scenario_label, write_run_truth, write_truth
 from lab.victim import make_server
@@ -161,3 +162,51 @@ def test_finds_user_installed_docker_desktop_cli_when_missing_from_path(tmp_path
 )
 def test_stop_control_only_appears_for_an_active_experiment(manifest, process_active, expected):
     assert live_lab_controller.should_offer_stop(manifest, process_active) is expected
+
+
+def test_latest_live_experiment_can_be_recovered_after_controller_reload(tmp_path):
+    controller = live_lab_controller.LiveLabController(tmp_path)
+    controller._write_manifest({
+        "experiment_id": "a" * 12,
+        "kind": "live",
+        "lab_mode": "live",
+        "created_at": "2026-10-09T10:00:00+00:00",
+        "status": "completed",
+        "senders": [],
+    })
+    controller._write_manifest({
+        "experiment_id": "b" * 12,
+        "kind": "live",
+        "lab_mode": "window_test",
+        "created_at": "2026-10-09T11:00:00+00:00",
+        "status": "completed",
+        "senders": [],
+    })
+
+    reloaded = live_lab_controller.LiveLabController(tmp_path)
+
+    assert reloaded.latest_live_experiment_id() == "a" * 12
+
+
+def test_scale_chart_uses_points_so_single_partition_runs_are_visible():
+    calls = []
+
+    class ChartSink:
+        def scatter_chart(self, frame, **options):
+            calls.append((frame, options))
+
+    frame = object()
+    live_view.render_scale_chart(ChartSink(), frame)
+
+    assert calls == [(frame, {
+        "x": "Flow đầu vào",
+        "y": "Trung vị xử lý (giây)",
+        "color": "Partition",
+    })]
+
+
+def test_completed_run_reports_spark_done_after_every_window_is_checked():
+    assert live_view.stream_feedback("completed", False, 135, 135) == (
+        "đã chốt",
+        "Spark đã xử lý xong và đối chiếu đủ 135 cửa sổ.",
+    )

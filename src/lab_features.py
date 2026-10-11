@@ -36,6 +36,46 @@ SESSION_FEATURES = (
     "mean_duration",
     "http_ratio",
 )
+WINDOW_FEATURES = (
+    "flow_count",
+    "elapsed_seconds",
+    "flow_rate",
+    "mean_sbytes",
+    "mean_dbytes",
+    "mean_duration",
+    "http_ratio",
+    "port_scan_ratio",
+)
+
+WINDOW_SECONDS = 10
+WATERMARK_SECONDS = 30
+
+
+def aggregate_windows(flows: DataFrame) -> DataFrame:
+    """The same observed-source features for batch training and streaming state."""
+    events = flows.withColumn("event_time", F.to_timestamp("timestamp")).where(
+        F.col("event_time").isNotNull() & F.col("source_ip").isNotNull()
+        & F.col("experiment_id").isNotNull()
+    )
+    if flows.isStreaming:
+        events = events.withWatermark("event_time", f"{WATERMARK_SECONDS} seconds")
+    grouped = events.groupBy(
+        "experiment_id", "source_ip", F.window("event_time", f"{WINDOW_SECONDS} seconds")
+    ).agg(
+        F.first("actor_id", ignorenulls=True).alias("actor_id"),
+        F.count("*").cast("double").alias("flow_count"),
+        F.avg(F.when(F.col("destination_port") != 8080, 1.0).otherwise(0.0)).alias("port_scan_ratio"),
+        F.avg("sbytes").cast("double").alias("mean_sbytes"),
+        F.avg("dbytes").cast("double").alias("mean_dbytes"),
+        F.avg("dur").cast("double").alias("mean_duration"),
+        F.avg(F.when(F.col("service") == "http", 1.0).otherwise(0.0)).alias("http_ratio"),
+    )
+    return grouped.withColumn("elapsed_seconds", F.lit(float(WINDOW_SECONDS))).withColumn(
+        "flow_rate", F.col("flow_count") / F.lit(float(WINDOW_SECONDS))
+    ).select(
+        "experiment_id", "source_ip", "actor_id", F.col("window.start").alias("window_start"),
+        F.col("window.end").alias("window_end"), *WINDOW_FEATURES,
+    )
 
 
 def aggregate_sessions(flows: DataFrame) -> DataFrame:

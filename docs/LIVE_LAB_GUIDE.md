@@ -1,102 +1,56 @@
-# Live Lab: 15 máy gửi traffic qua Spark IDS
+# Demo tương tác và bài đo Spark IDS
 
-Live Lab tạo các kết nối TCP trong một mạng Docker nội bộ. Victim ghi mỗi kết nối thành một flow JSON; Spark Structured Streaming gom flow theo từng máy gửi; mô hình Random Forest trong Spark MLlib chấm điểm từng lượt traffic.
+## Demo cho người xem
 
-## Luồng demo
-
-1. Mở trang **Live Lab** và chọn **Tự động** hoặc **Tự chọn**.
-2. Kiểm tra bảng phân công đủ 15 máy. Chế độ tự động chia 5 bình thường, 5 quét cổng, 5 gửi dồn; chế độ tự chọn yêu cầu tổng đúng 15 và ít nhất 1 máy bình thường.
-3. Bấm **Chạy mô phỏng 15 máy**. Dashboard chuẩn bị victim và khởi chạy 15 container riêng.
-4. Mỗi container báo sẵn sàng rồi chờ. Khi đủ cả 15 máy, dashboard phát tín hiệu bắt đầu chung.
-5. Victim ghi traffic; Spark đọc các flow mới, gom theo máy và chấm bằng MLlib.
-6. Bảng kết quả cập nhật số flow gửi/nhận, kết quả Spark, điểm nghi ngờ và đối chiếu bắt đúng/báo nhầm/bỏ sót.
-
-Các kịch bản có kích thước cố định để dễ so sánh:
-
-| Kịch bản | Traffic tạo ra |
-|---|---:|
-| Bình thường | 12 yêu cầu HTTP rải cách nhau |
-| Quét cổng | 12 kết nối tới các cổng mồi 9001–9012 |
-| Gửi dồn | 30 yêu cầu HTTP gửi đồng thời theo từng nhóm nhỏ |
-
-Chế độ tự động xáo thứ tự máy bằng seed hiển thị trên trang. Seed cùng với bảng phân công được lưu trong hồ sơ lượt chạy. Mỗi lần chạy có mã riêng; nhãn thật được lưu ngoài dữ liệu đầu vào của mô hình.
-
-## Chuẩn bị mô hình một lần
-
-Mở PowerShell tại thư mục gốc dự án. Docker Desktop cần chạy ở chế độ Linux containers.
-
-Khởi động máy nhận traffic:
-
-    docker compose -p sparknids-live-lab -f lab/compose.yaml up --build -d victim
-
-Tạo dữ liệu hiệu chỉnh theo đúng ba kịch bản của Live Lab. Dữ liệu mới được lưu riêng, không ghi đè bộ traffic cũ:
-
-    docker compose -p sparknids-live-lab -f lab/compose.yaml run --rm generator training --lab-mode calibration --runs-per-scenario 60
-
-Huấn luyện riêng mô hình Docker của Live Lab (không cần đọc lại Parquet UNSW-NB15):
-
-    . .\scripts\project_env.ps1
-    .\.venv\Scripts\python.exe -m src.lab_model --session-only
-
-Khi có ít nhất năm lượt hoàn chỉnh của mỗi lớp, lệnh chọn riêng dữ liệu calibration mới; nếu chưa đủ, nó dùng lại bộ training cũ. Báo cáo train/validation/test ghi rõ nguồn dữ liệu. Trang chỉ bật nút mô phỏng khi có mô hình.
-
-### Kiểm tra mô hình với traffic khác cấu hình
-
-Bộ test calibration giữ riêng các lượt chạy, nhưng vẫn dùng đúng ba mẫu cố định của Live Lab. Vì vậy 100% trên bộ này chỉ cho thấy mô hình nhận ra các mẫu quen. Để kiểm tra khi số kết nối và nhịp gửi thay đổi, thu thêm các lượt Docker ở chế độ `training` (bộ này không được dùng để huấn luyện mô hình calibration):
-
-    docker compose -p sparknids-live-lab -f lab/compose.yaml run --rm generator training --lab-mode training --runs-per-scenario 30
-
-Chấm bộ khác cấu hình bằng mô hình đã lưu, không huấn luyện lại:
-
-    . .\scripts\project_env.ps1
-    .\.venv\Scripts\python.exe -m src.lab_model --audit-only
-
-Trang Live Lab đặt hai bài kiểm tra cạnh nhau: số lượt đúng trên mẫu quen và số lượt đúng trên traffic khác cấu hình, kèm số báo động nhầm trong các lượt bình thường. Nếu huấn luyện lại với `--session-only`, báo cáo khác cấu hình cũng được tính lại khi có dữ liệu tương ứng. Cả hai bộ vẫn là traffic trong mạng Docker nội bộ; không suy ra độ chính xác trên mạng thực.
-
-## Chạy demo
-
-Mở PowerShell thứ nhất và chạy Spark Structured Streaming:
-
-    . .\scripts\project_env.ps1
-    .\.venv\Scripts\python.exe -m src.lab_stream
-
-Mở PowerShell thứ hai để bật giao diện:
+Mở PowerShell ở thư mục dự án, bật Spark IDS:
 
     . .\scripts\project_env.ps1
     .\.venv\Scripts\streamlit.exe run dashboard\app.py --server.port 8501
 
-Mở http://127.0.0.1:8501, chọn **Live Lab**, chọn cách chia máy rồi bấm nút chạy. Khi 15 máy đã sẵn sàng, chúng cùng gửi traffic. Không cần chạy generator từng lệnh riêng.
+Mở http://127.0.0.1:8501, chọn trang Live Lab. Docker Desktop cần chạy ở chế độ Linux containers.
 
-Nếu dashboard hiện ít lượt Spark đã chấm, kiểm tra cửa sổ Spark có đang chạy lệnh src.lab_stream không. Có thể dừng lượt đang gửi bằng nút **Dừng lượt mô phỏng**.
+Nếu đây là lần đầu, bấm “Chuẩn bị mô hình bằng Docker”. Hệ thống chạy 15 sender trong ba lượt Docker độc lập để tạo dữ liệu huấn luyện, chọn ngưỡng và kiểm tra cuối. Bước này mất vài phút; xem tiến độ trên trang. Có thể chuẩn bị trước bằng:
 
-## Đọc bảng kết quả
+    . .\scripts\project_env.ps1
+    .\.venv\Scripts\python.exe -m src.lab_window_model --collect --duration 50
 
-- **Máy gửi nhận:** số yêu cầu generator gửi thành công tới victim, trên tổng dự kiến.
-- **Spark gom:** số flow Spark đã đọc cho máy đó, trên tổng dự kiến. Chờ đủ số này trước khi đánh giá.
-- **MLlib dự đoán:** kết luận của mô hình dựa trên các đặc trưng traffic.
-- **Điểm nghi ngờ:** xác suất mô hình gán cho lớp đáng ngờ; ngưỡng đã học quyết định nhãn cuối.
-- **Đối chiếu:** so sánh dự đoán MLlib với kịch bản thực tế được giữ riêng.
+Sau khi mô hình sẵn sàng, bấm “Chạy 15 máy cùng lúc”. Chế độ tự động bắt đầu bằng traffic thường, chuyển một số máy sang hành vi cần kiểm tra sau 15 giây và trở về bình thường sau 60 giây. Mỗi máy vẫn chạy traffic riêng; seed được lưu để tái hiện lịch tự động.
 
-Bắt đúng nghĩa là máy quét/gửi dồn được nhận ra. Bỏ sót nghĩa là traffic đáng ngờ bị gọi bình thường. Báo động nhầm nghĩa là máy bình thường bị đánh dấu đáng ngờ. Đây là kết quả của lượt demo hiện tại, khác với Precision/Recall/F1 trong tập test huấn luyện.
+Để tương tác, chọn một máy, đổi hành vi và tốc độ, rồi bấm “Áp dụng cho máy đã chọn”. Có thể đưa máy về “Theo kịch bản”. Hành vi kiểm tra có quét các cổng mồi trong Docker, gửi dồn hoặc gửi dồn ngắt quãng. Traffic không rời mạng nội bộ của Compose. Mô phỏng dừng sau thời lượng chọn được hoặc bấm “Dừng gửi traffic”.
 
-Lượt 15 máy mặc định dùng ba mẫu cố định để trình bày luồng Docker → Spark → MLlib. Đọc phần **Bài kiểm tra mô hình: mẫu quen và mẫu khác** bên dưới bảng nếu muốn đánh giá khả năng chịu thay đổi của mô hình. Phần trăm không được tạo ngẫu nhiên; mỗi con số tính từ dự đoán thật và nhãn đối chiếu của từng lượt đã ghi.
+## Người xem đang nhìn gì?
 
-## Spark đang làm gì?
+| Trên màn hình | Có nghĩa là |
+|---|---|
+| Sơ đồ 15 máy → server → Spark → MLlib | Những bước đang xử lý lượt traffic |
+| Kết nối máy chủ nhận | Số kết nối TCP victim đã thật sự ghi nhận |
+| Flow Spark gom | Số flow mới mà Spark đã nhóm vào cửa sổ của máy |
+| Tốc độ/giây, cổng mồi (%) | Số đo từ traffic; nhãn và kịch bản không đi vào mô hình |
+| Điểm nghi ngờ | Xác suất Random Forest gán cho hành vi đáng ngờ |
+| Tạm tính | Cửa sổ chưa nhận đủ dữ liệu đến muộn để đánh giá |
+| Cửa sổ đã đối chiếu | Cửa sổ Spark đã khớp số flow với nhãn độc lập |
+| Bắt đúng/báo nhầm/bỏ sót | Tổng kết trên mọi cửa sổ đã đối chiếu trong lượt |
 
-- **Structured Streaming:** theo dõi thư mục flow demo và đọc file mới theo micro-batch.
-- **Spark SQL:** nhóm theo run_id, đếm flow/cổng và tính tốc độ, byte trung bình, thời lượng, tỷ lệ HTTP.
-- **Spark MLlib:** đưa các đặc trưng của cả lượt vào Random Forest để chấm điểm.
-- **Dashboard:** ghép nhãn thật sau khi dự đoán để trình bày kết quả. Nhãn không được đưa vào mô hình.
+Structured Streaming đọc các file JSONL mới, dùng event time cùng watermark 30 giây, rồi cập nhật đặc trưng 10 giây theo IP nguồn. Báo cáo tiến độ Spark hiện số flow của micro-batch, tốc độ Spark xử lý, thời gian batch, watermark và trạng thái Spark. Spark giữ trạng thái cửa sổ trong checkpoint; trang chỉ đọc snapshot dự đoán nhỏ và nhãn đối chiếu được ghi riêng.
 
-Dù có 15 container gửi đồng thời, Spark hiện chạy local[2] trên máy này, không phải cụm 15 máy Spark. Mục tiêu của 15 sender là tạo nhiều nguồn traffic cùng lúc; đây không phải phép đo hiệu năng cluster.
+Khi cả 15 sender hoàn tất, trang chốt các cửa sổ còn lại bằng cách kiểm tra số flow Spark gom có khớp số flow victim ghi nhãn hay không. Tổng Bắt đúng/Báo nhầm/Bỏ sót/Bình thường đúng tính mỗi cửa sổ đúng một lần; nó khác với số máy đang bị gắn cờ ở cửa sổ mới nhất.
 
-## Giới hạn an toàn và độ tin cậy
+Mô hình dùng ba số đo: tốc độ kết nối, tỷ lệ kết nối tới cổng mồi và tỷ lệ HTTP. Train, validation và test lấy từ ba experiment Docker riêng. Random Forest và luật đơn giản đều chấm cùng tập test để người xem thấy MLlib có cải thiện thực sự không. Kết quả mô tả bộ traffic kiểm soát này; không đại diện mọi mạng.
 
-Mạng Compose đặt internal: true, generator chỉ kết nối victim trong mạng đó; kịch bản không tấn công Internet hoặc máy bên ngoài. “Quét cổng” chỉ chạm các cổng mồi của victim trong lab. Traffic do chương trình tạo có kiểm soát, không đại diện toàn bộ tấn công thực tế. Victim đo byte ở tầng ứng dụng, không thu PCAP hoặc byte Ethernet/IP.
+## Bài đo dữ liệu lớn
 
-## Dừng và xem log
+Mở mục “Bài đo dữ liệu lớn · UNSW-NB15” bên dưới mô phỏng, bấm “Tải dữ liệu đã kiểm chứng và chạy phép đo”. Lần đầu hệ thống tải các file CSV theo SHA-256 trong cấu hình, xác nhận dữ liệu và chuẩn bị Bronze/Silver Parquet. Sau đó cùng một truy vấn Spark chạy trên 5.000, 35.000 và toàn bộ dữ liệu train, với ba partition khác nhau ở quy mô lớn.
 
-Nút dừng chỉ dừng các container gửi traffic; Spark và victim có thể tiếp tục chạy để xem kết quả. Log riêng từng sender được lưu trong outputs/live_lab/actors. Tắt các dịch vụ Docker khi hoàn tất:
+Bảng thể hiện số flow, dung lượng Parquet, Task, thời gian tạo cache và trung vị của ba lần đo. Kết quả tổng hợp có SHA-256 để xác nhận chia partition không làm đổi kết quả. Một lượt làm nóng chạy trước các lượt tính giờ. Phép đo dùng Silver Parquet đã cache; thời gian không tính tải, chuyển đổi dữ liệu hay ghi Parquet. Ứng dụng chạy local[2] trên máy cá nhân, nên số liệu cho thấy ảnh hưởng của quy mô đầu vào và partition trên máy này, không phải tốc độ của Spark cluster.
 
-    docker compose -p sparknids-live-lab -f lab/compose.yaml down
+Có thể chạy phép đo ngoài giao diện:
+
+    . .\scripts\project_env.ps1
+    .\.venv\Scripts\python.exe -m src.lab_scale
+
+## Giới hạn cần nói rõ
+
+15 container là 15 nguồn traffic Docker, không phải 15 máy Spark. Server ghi thông tin kết nối TCP ở tầng ứng dụng; lab không thu PCAP. Các hành vi là tình huống được tạo có kiểm soát. Báo nhầm, bỏ sót và độ trễ đều là kết quả đo, không nên sửa hoặc làm tròn để trông đẹp hơn. Đóng tài nguyên Docker khi demo xong:
+
+    docker compose -p sparknids-live-lab down
 

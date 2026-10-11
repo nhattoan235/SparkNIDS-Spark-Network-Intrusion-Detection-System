@@ -4,14 +4,39 @@
 bằng PySpark DataFrame, Spark SQL và Spark MLlib. Tài liệu phạm vi và các phase
 nằm tại `KE_HOACH_PHAT_HIEN_XAM_NHAP_SPARK.md`.
 
+## Bắt đầu nhanh
+
+Dashboard có ba phần riêng để người xem không nhầm mục đích:
+
+| Trang | Dùng để xem gì? | Cần Docker? |
+|---|---|---|
+| **UNSW-NB15** (`/`) | Pipeline dữ liệu lớn: Spark đọc CSV, ghi Parquet, chia tập; MLlib học và chấm test độc lập. | Không |
+| **Live Lab** (`/Live_Lab`) | 15 máy Docker gửi traffic đến máy chủ; Spark Streaming gom dữ liệu và MLlib chấm hành vi. | Có |
+| **Spark Guided Demo** | Ví dụ ngắn giải thích CSV/Parquet, lazy evaluation, Job/Stage/Task, cache, MLlib và streaming. | Không |
+
+Mở PowerShell tại thư mục dự án và chạy giao diện:
+
+```powershell
+.\.venv\Scripts\streamlit.exe run dashboard\app.py
+```
+
+Mở `http://127.0.0.1:8501`. Trang UNSW hiển thị kết quả full-data mới nhất nếu đã có lượt chạy. Để chạy lại cả pipeline:
+
+```powershell
+. .\scripts\project_env.ps1
+.\.venv\Scripts\python.exe -m src.full_unsw_pipeline --phase all
+```
+
+Pipeline đọc dữ liệu ở ổ D theo cấu hình, chạy Spark `local[2]` và thường mất vài phút trên laptop này. Trong lúc chạy, nhấn **F5** để đọc trạng thái mới trên dashboard. Không cần Docker cho nhánh UNSW; mỗi lần chạy tạo một lượt mới và không ghi đè kết quả cũ. Hướng dẫn thuyết trình từng phút nằm ở [`docs/KICH_BAN_DEMO_UNSW_FULL.md`](docs/KICH_BAN_DEMO_UNSW_FULL.md).
+
 ## Trạng thái
 
-Phase 1–10 đã hoàn thành: môi trường Spark local, Bronze/Silver Parquet, schema
-tường minh, validation, làm sạch, EDA bằng Spark SQL, Spark ML Pipeline chống
-leakage, Logistic Regression baseline, so sánh mô hình và batch inference bằng
-model cuối đã khóa, benchmark/execution evidence và dashboard trình bày offline.
-Phần mở rộng Structured Streaming file-source cũng đã được kiểm chứng với
-checkpoint/restart. Phase tiếp theo là báo cáo và chuẩn bị thuyết trình.
+Các phase 1–10 đã hoàn thành: môi trường Spark local, Bronze/Silver Parquet,
+validation, làm sạch, EDA bằng Spark SQL, Spark ML Pipeline chống leakage,
+baseline/so sánh mô hình, batch inference, benchmark và Structured Streaming
+file-source. Nhánh mở rộng full-data UNSW-NB15 cũng đã chạy end-to-end trên
+2.540.047 dòng: chuẩn bị Parquet, chia train/validation/test, fit Spark MLlib
+và chấm test độc lập. Báo cáo và kịch bản demo nằm trong `docs/`.
 
 ## Yêu cầu môi trường
 
@@ -85,6 +110,33 @@ và label không hợp lệ; sau đó ghi và đọc lại:
 
 CSV gốc và Bronze Parquet bị loại khỏi commit; sample nhỏ được phép lưu cùng mã
 nguồn để test chạy không cần tải toàn bộ dữ liệu.
+
+## Chạy trên bộ CSV gốc đầy đủ — Spark MLlib
+
+Đây là nhánh chứng minh dữ liệu lớn của đồ án, tách riêng với bộ train/test
+designated ở trên và với Docker Live Lab. Bốn CSV thô (~586 MB) cùng Bronze,
+Silver, split Parquet, model, log và kết quả đặt trên ổ D theo
+[`docs/DATASET_SOURCE.md`](docs/DATASET_SOURCE.md). Nội dung nguồn được kiểm tra
+checksum; các con số 2.540.044 trên trang UNSW và 2.540.047 dòng đọc từ bốn CSV
+đã xác minh được ghi riêng, không tự bỏ 3 dòng chênh.
+
+```powershell
+. .\scripts\project_env.ps1
+.\.venv\Scripts\python.exe -m src.full_unsw_pipeline --phase prepare
+.\.venv\Scripts\python.exe -m src.full_unsw_pipeline --phase train
+```
+
+`prepare` đọc 49 cột CSV bằng Spark, ghi Parquet, audit ô thiếu/không hợp lệ,
+giữ nguyên các dòng trùng nhưng chia chung theo fingerprint, loại nhóm nhãn mâu thuẫn,
+và chia train/validation/test. `train` fit
+Logistic Regression bằng Spark MLlib trên toàn bộ train, chọn ngưỡng từ
+validation, khóa model rồi mới chấm toàn bộ test độc lập. Lượt chạy lưu riêng
+trong `data/full_unsw/runs/<run-id>` trên D; `data/full_unsw/latest.json` trỏ
+đến lượt mới nhất. Có thể chạy cả hai bằng `--phase all`. Mặc định Spark chạy
+`local[2]` trên một laptop, không phải cụm nhiều máy.
+
+Dashboard chính trình bày pipeline UNSW full-data; trang `Docker Live Lab` là
+mô phỏng traffic streaming riêng và không dùng chung model với bộ UNSW.
 
 ## Làm sạch và EDA — Phase 3
 
@@ -239,7 +291,7 @@ Artifact:
 - `docs/SPARK_EXECUTION_AND_BENCHMARK.md`: giải thích Partition → Task → Stage →
   Job, shuffle, cache và giới hạn benchmark.
 
-## Dashboard guided demo — Phase 9
+## Dashboard
 
 Tạo lại gói dữ liệu nhỏ cho dashboard từ các artifact đã có:
 
@@ -247,19 +299,19 @@ Tạo lại gói dữ liệu nhỏ cho dashboard từ các artifact đã có:
 .\.venv\Scripts\python.exe -m src.export_dashboard_data
 ```
 
-Khởi động dashboard offline bằng:
+Khởi động dashboard bằng:
 
 ```powershell
 .\.venv\Scripts\streamlit.exe run dashboard\app.py
 ```
 
-Mở `http://127.0.0.1:8501`. Dashboard guided demo có 7 bước theo một flow
-`Input → Spark xử lý → Kết quả`: dữ liệu/schema, CSV/Parquet, lazy evaluation,
-Job/Stage/Task, cache, MLlib Random Forest và Structured Streaming.
-Ứng dụng không khởi tạo Spark và không đọc Parquet/CSV lớn; nó chỉ đọc status
-JSON nhỏ của runner hoặc artifact fallback đã export. Spark UI được mở tại
-`http://127.0.0.1:4040` trong lúc runner còn giữ SparkSession. Xem hướng dẫn và
-giới hạn tại `docs/DASHBOARD_GUIDE.md`.
+Mở `http://127.0.0.1:8501`. Trang chính là kết quả pipeline full-data
+UNSW-NB15. Trang **Live Lab** minh họa traffic Docker riêng; trang **Spark
+Guided Demo** vẫn giữ 7 bước giải thích các khái niệm Spark. Dashboard không
+khởi tạo Spark và không đọc Parquet/CSV lớn; nó chỉ đọc các báo cáo JSON nhỏ do
+runner ghi. Spark UI được mở tại `http://127.0.0.1:4040` trong lúc Spark còn
+chạy. Xem hướng dẫn các trang tại `docs/DASHBOARD_GUIDE.md` và kịch bản full-data
+tại `docs/KICH_BAN_DEMO_UNSW_FULL.md`.
 
 Artifact:
 
@@ -315,10 +367,13 @@ mục nguồn. Xem quy trình, data contract và giới hạn tại docs/STREAMI
 
 ## Live Lab với traffic Docker
 
-Đồ án có thêm một lab thực hành riêng: Docker tạo traffic TCP cô lập, Spark
-Structured Streaming đọc flow mới, gom số liệu theo lượt và Spark MLlib phân
-loại lượt đó. Mô hình lab được huấn luyện bằng các lượt Docker có nhãn được giữ
-riêng; mô hình UNSW-NB15 và official test tiếp tục được báo cáo độc lập.
+Đồ án có thêm một lab thực hành riêng: 15 container Docker tạo traffic TCP cô
+lập; Spark Structured Streaming gom flow thành cửa sổ 10 giây theo IP nguồn,
+rồi Spark MLlib Random Forest chấm điểm. Kịch bản tự động đi từ bình thường,
+sang bất thường rồi trở lại bình thường; người xem cũng có thể đổi hành vi của
+một máy ngay khi chạy. Nhãn để đối chiếu được lưu riêng, không đưa vào mô hình.
+Train, validation và test lab là ba lượt Docker độc lập; chúng không thay thế
+đánh giá UNSW-NB15 hay official test.
 
 Hướng dẫn cài đặt, lệnh chạy theo thứ tự, cách đọc dashboard và giới hạn đo nằm
 tại [docs/LIVE_LAB_GUIDE.md](docs/LIVE_LAB_GUIDE.md).

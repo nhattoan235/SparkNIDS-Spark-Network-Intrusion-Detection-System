@@ -58,19 +58,9 @@ def _validate_demo_status(status: dict[str, Any]) -> None:
 
 
 def _not_ready_status(message: str) -> dict[str, Any]:
-    return {
-        "schema_version": 1,
-        "run_id": None,
-        "mode": None,
-        "status": "not_ready",
-        "fallback": False,
-        "spark_ui_url": None,
-        "steps": [
-            {"id": step_id, "index": index, "title": step_id, "status": "pending", "flow": {}, "metrics": [], "explanation": "", "evidence": {}}
-            for index, step_id in enumerate(DEMO_STEP_IDS, start=1)
-        ],
-        "errors": [{"message": message}],
-    }
+    status = new_demo_status("not-ready", "full", None)
+    status.update(status="not_ready", fallback=False, errors=[{"message": message}])
+    return status
 
 
 def load_demo_status(demo_root: str | Path = DEMO_OUTPUT_ROOT) -> dict[str, Any]:
@@ -101,14 +91,15 @@ def load_demo_status(demo_root: str | Path = DEMO_OUTPUT_ROOT) -> dict[str, Any]
 
 def load_static_demo_fallback() -> dict[str, Any]:
     """Build a small seven-step view from the already exported Phase artifacts."""
+    try:
+        bundle = load_dashboard_bundle()
+    except (FileNotFoundError, ValueError, KeyError) as error:
+        return _not_ready_status(f"Chưa có artifact offline để hiển thị: {error}")
+
     status = new_demo_status("offline-fallback", "full", None)
     status["status"] = "succeeded"
     status["fallback"] = True
     status["explanation"] = "Runner chưa có artifact live; đang hiển thị số liệu đã export offline."
-    try:
-        bundle = load_dashboard_bundle()
-    except (FileNotFoundError, ValueError, KeyError):
-        bundle = {}
 
     def finish(step_id: str, *, flow: dict[str, str], metrics: list[dict[str, str]], explanation: str, evidence: dict[str, Any]) -> None:
         step = next(item for item in status["steps"] if item["id"] == step_id)
