@@ -16,6 +16,18 @@ from src.lab_window_model import atomic_report
 from src.spark_session import PROJECT_ROOT, create_spark_session, load_config
 
 
+def _batch_measurement(progress: dict) -> dict:
+    input_rows = int(progress.get("numInputRows", 0) or 0)
+    duration_seconds = float(progress.get("durationMs", {}).get("triggerExecution", 0) or 0) / 1000
+    return {
+        "batch_id": int(progress.get("batchId", 0)),
+        "timestamp": progress.get("timestamp"),
+        "input_rows": input_rows,
+        "duration_seconds": duration_seconds,
+        "flow_per_second": input_rows / duration_seconds if input_rows and duration_seconds > 0 else None,
+    }
+
+
 def window_key(record: dict) -> str:
     return f"{record['experiment_id']}|{record['source_ip']}|{record['window_start']}"
 
@@ -50,6 +62,7 @@ def run_stream(*, once: bool = False, trigger_seconds: int = 3) -> None:
     query = None
     progress_path = output / "progress.json"
     batch_report = {}
+    recent_batches = []
     atomic_report(progress_path, {"status": "starting", "heartbeat": time.time()})
     try:
         model = PipelineModel.load(str(model_root / "window_pipeline"))
@@ -91,17 +104,23 @@ def run_stream(*, once: bool = False, trigger_seconds: int = 3) -> None:
         previous_batch = None
         while query.isActive:
             latest = query.lastProgress or {}
+            new_batch = bool(latest and latest.get("batchId") != previous_batch)
+            if new_batch:
+                recent_batches.append(_batch_measurement(latest))
+                del recent_batches[:-30]
+                previous_batch = latest.get("batchId")
             report = {"status": "running", "heartbeat": time.time(), "master": spark.sparkContext.master,
                 "spark_ui_url": spark.sparkContext.uiWebUrl, "window_seconds": WINDOW_SECONDS,
-                "watermark_seconds": WATERMARK_SECONDS, "threshold": threshold, **batch_report,
+                "watermark_seconds": WATERMARK_SECONDS, "threshold": threshold,
+                "stream_batch_id": latest.get("batchId"), **batch_report,
+                "recent_batches": recent_batches,
                 "input_rows": latest.get("numInputRows", 0),
                 "input_rows_per_second": latest.get("inputRowsPerSecond", 0),
                 "processed_rows_per_second": latest.get("processedRowsPerSecond", 0),
                 "batch_seconds": latest.get("durationMs", {}).get("triggerExecution", 0) / 1000,
                 "event_time": latest.get("eventTime", {}), "state": latest.get("stateOperators", [])}
             atomic_report(progress_path, report)
-            if latest and latest.get("batchId") != previous_batch:
-                previous_batch = latest["batchId"]
+            if new_batch:
                 print(json.dumps({key: report[key] for key in ("batch_id", "input_rows", "batch_seconds") if key in report}), flush=True)
             query.awaitTermination(2)
         query.awaitTermination()

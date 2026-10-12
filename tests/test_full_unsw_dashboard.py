@@ -91,10 +91,41 @@ def test_main_page_shows_real_test_counts_and_metrics(monkeypatch, tmp_path):
 
     assert not app.exception
     content = "\n".join(item.value for item in app.markdown)
-    metric_labels = [metric.label for metric in app.metric]
-    metric_values = [metric.value for metric in app.metric]
-    assert "Flow test đã chấm" in metric_labels
-    assert "30" in metric_values
-    assert "Bắt đúng tấn công" in metric_labels
-    assert "Bỏ sót tấn công" in metric_labels
+    assert "Flow test đã chấm" in content
+    assert "30" in content
+    assert "Bắt đúng tấn công" in content
+    assert "Bỏ sót tấn công" in content
+    assert 'class="metric-card good"' in content
+    assert 'class="metric-card bad"' in content
     assert any(button.label == "Chạy pipeline UNSW đầy đủ" for button in app.button)
+
+
+def test_main_page_shows_checkpoint_progress_while_spark_is_running(monkeypatch, tmp_path):
+    run_dir = tmp_path / "runs" / "fixture-running"
+    run_dir.mkdir(parents=True)
+    run = {
+        "schema_version": 1,
+        "run_id": "fixture-running",
+        "status": "preparing",
+        "progress": {
+            "completed_steps": 2,
+            "total_steps": 8,
+            "current_step": "Làm sạch và ghi Silver Parquet",
+        },
+    }
+    (run_dir / "run.json").write_text(json.dumps(run), encoding="utf-8")
+    (tmp_path / "latest.json").write_text(
+        json.dumps({"schema_version": 1, "run_id": "fixture-running", "status": "preparing", "run_path": str(run_dir / "run.json")}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("SPARKNIDS_FULL_UNSW_ROOT", str(tmp_path))
+
+    app = AppTest.from_file(
+        str(Path(__file__).resolve().parents[1] / "dashboard" / "app.py"),
+        default_timeout=30,
+    ).run()
+
+    assert not app.exception
+    content = "\n".join(item.value for item in [*app.markdown, *app.caption])
+    assert "Tiến trình: 2/8 bước" in content
+    assert "Làm sạch và ghi Silver Parquet" in content

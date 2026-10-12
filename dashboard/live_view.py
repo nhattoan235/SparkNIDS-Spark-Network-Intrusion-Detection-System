@@ -19,11 +19,60 @@ def read_json(path: Path, default=None):
 
 
 def render_scale_chart(chart, frame):
-    chart.scatter_chart(
+    chart.bar_chart(
         frame,
-        x="Flow đầu vào",
-        y="Trung vị xử lý (giây)",
+        x="Quy mô dữ liệu",
+        y="Tốc độ Spark (flow/giây)",
         color="Partition",
+        x_label="Số flow Spark đọc",
+        y_label="Flow được xử lý trong một giây",
+    )
+
+
+def spark_throughput_rows(batches: list[dict]) -> list[dict]:
+    rows = []
+    for batch in batches:
+        input_rows = int(batch.get("input_rows", batch.get("numInputRows", 0)) or 0)
+        duration_seconds = float(batch.get(
+            "duration_seconds",
+            batch.get("batch_seconds", batch.get("durationMs", {}).get("triggerExecution", 0) / 1000),
+        ) or 0)
+        if input_rows <= 0 or duration_seconds <= 0:
+            continue
+        rate = batch.get("flow_per_second")
+        rate = float(rate) if rate is not None else input_rows / duration_seconds
+        batch_id = batch.get("batch_id", batch.get("stream_batch_id", batch.get("batchId", 0)))
+        rows.append({
+            "Lô Spark": f"#{int(batch_id)}",
+            "Flow/giây": rate,
+            "Flow trong lô": input_rows,
+            "Thời gian xử lý (giây)": duration_seconds,
+        })
+    return rows
+
+
+def remember_spark_batch(history: list[dict], batch: dict) -> list[dict]:
+    input_rows = int(batch.get("input_rows", 0) or 0)
+    duration = float(batch.get("batch_seconds", 0) or 0)
+    batch_id = int(batch.get("batch_id", batch.get("stream_batch_id", 0)) or 0)
+    if input_rows <= 0 or duration <= 0 or any(item.get("batch_id") == batch_id for item in history):
+        return history
+    history.append({"batch_id": batch_id, "input_rows": input_rows, "batch_seconds": duration})
+    del history[:-30]
+    return history
+
+
+def window_count_explanation(window_count: int, sender_count: int, windows_per_machine: int) -> str:
+    if window_count <= 0:
+        return f"Chưa có cửa sổ dữ liệu {WINDOW_SECONDS} giây để Spark chấm."
+    if sender_count > 0 and windows_per_machine > 0 and window_count == sender_count * windows_per_machine:
+        return (
+            f"{window_count} lần chấm = {sender_count} máy × {windows_per_machine} cửa sổ/máy; "
+            f"mỗi cửa sổ gom kết nối trong {WINDOW_SECONDS} giây, không phải một kết nối."
+        )
+    return (
+        f"{window_count} lần chấm; mỗi lần là dữ liệu của một máy trong một cửa sổ "
+        f"{WINDOW_SECONDS} giây, không phải một kết nối."
     )
 
 
@@ -31,7 +80,10 @@ def stream_feedback(experiment_status, stream_fresh, checked_count, total_count)
     if stream_fresh:
         return "đang xử lý", "Spark đang xử lý các flow mới."
     if experiment_status == "completed" and total_count > 0 and checked_count == total_count:
-        return "đã chốt", f"Spark đã xử lý xong và đối chiếu đủ {checked_count} cửa sổ."
+        return "đã chốt", (
+            f"Spark đã đối chiếu đủ {checked_count} cửa sổ dữ liệu "
+            f"(mỗi cửa sổ là 1 máy trong {WINDOW_SECONDS} giây)."
+        )
     if experiment_status == "completed":
         waiting = max(total_count - checked_count, 0)
         return "chờ đối chiếu", f"Máy gửi đã xong; còn {waiting} cửa sổ chưa đối chiếu được."

@@ -98,6 +98,20 @@ def inject_styles() -> None:
           .plain-answer { min-height: 5rem; padding: .8rem .9rem; border-top: 1px solid var(--lab-ink); background: var(--lab-panel); font-size: .94rem; line-height: 1.45; }
           .plain-answer.ids-answer { border-top-color: var(--lab-ids); background: var(--lab-ids-soft); }
 
+          .metric-grid { display: grid; gap: .55rem; margin: .55rem 0 1rem; }
+          .metric-grid.columns-1 { grid-template-columns: 1fr; }
+          .metric-grid.columns-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+          .metric-grid.columns-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+          .metric-grid.columns-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+          .metric-card { min-width: 0; padding: .58rem .72rem; border: 1px solid var(--lab-line); border-left: 4px solid var(--lab-line); background: var(--lab-panel); }
+          .metric-card span, .metric-card strong { display: block; }
+          .metric-card span { color: var(--lab-muted); font-size: .75rem; line-height: 1.25; }
+          .metric-card strong { margin-top: .12rem; color: var(--lab-ink); font: 700 clamp(1.2rem, 2.2vw, 1.8rem)/1.15 "Bahnschrift", "Trebuchet MS", sans-serif; overflow-wrap: anywhere; }
+          .metric-card.good { border-left-color: var(--lab-ids); background: var(--lab-ids-soft); }
+          .metric-card.warning { border-left-color: var(--lab-spark); background: var(--lab-spark-soft); }
+          .metric-card.bad { border-left-color: #a33c2d; background: #f4dfda; }
+          div[data-testid="stProgress"] > div > div { background: var(--lab-spark); }
+
           details { border-top: 1px solid var(--lab-line) !important; border-bottom: 1px solid var(--lab-line) !important; border-radius: 0 !important; margin-top: 1.1rem; }
           div[data-testid="stButton"] > button,
           div[data-testid="stLinkButton"] > a { border-radius: 0; border: 1px solid var(--lab-ink); min-height: 2.7rem; font-weight: 700; }
@@ -120,6 +134,7 @@ def inject_styles() -> None:
             .step-ticks { grid-template-columns: repeat(2, minmax(0, 1fr)); }
             .step-heading { display: block; }
             .step-heading strong { display: block; margin-top: .35rem; }
+            .metric-grid.columns-4, .metric-grid.columns-3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
           }
         </style>
         """,

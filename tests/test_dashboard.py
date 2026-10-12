@@ -16,6 +16,19 @@ from dashboard.data_access import (
     load_static_demo_fallback,
 )
 from dashboard.presentation import STAGES, build_step_view
+from dashboard.ui import metric_cards_html
+
+
+def test_metric_cards_escape_text_and_keep_semantic_colors() -> None:
+    markup = metric_cards_html([
+        ("Bắt đúng", "12", "good"),
+        ("<script>", "&", "unknown"),
+    ], columns=2)
+
+    assert 'class="metric-card good"' in markup
+    assert 'class="metric-card neutral"' in markup
+    assert "&lt;script&gt;" in markup
+    assert "&amp;" in markup
 
 
 def test_presentation_groups_seven_steps_into_three_stages() -> None:
@@ -142,6 +155,46 @@ def test_streamlit_app_renders_without_exception() -> None:
         assert not app.exception
     rendered_text = list(app.markdown) + list(app.subheader)
     assert any("Structured Streaming" in item.value for item in rendered_text)
+
+
+def test_live_lab_shows_full_width_machine_table_before_detection_summary() -> None:
+    app = AppTest.from_file(
+        str(Path(PROJECT_ROOT) / "dashboard" / "pages" / "01_Live_Lab.py"),
+        default_timeout=30,
+    ).run()
+
+    assert not app.exception
+
+    rendered = []
+
+    def collect(node, parent_type=""):
+        children = getattr(node, "children", {})
+        values = children.values() if isinstance(children, dict) else children
+        for child in values:
+            rendered.append((child, parent_type))
+            collect(child, type(child).__name__)
+
+    collect(app._tree)
+    machine_heading = next(
+        index for index, (item, _) in enumerate(rendered)
+        if type(item).__name__ == "Markdown" and "Mỗi máy đang được Spark đánh giá" in item.value
+    )
+    result_heading = next(
+        index for index, (item, _) in enumerate(rendered)
+        if type(item).__name__ == "Markdown" and "Kết quả phát hiện" in item.value
+    )
+    table = next(
+        index for index, (item, _) in enumerate(rendered)
+        if type(item).__name__ == "Dataframe" and "Máy" in item.value.columns
+        and ("Kết nối / 10 giây" in item.value.columns or "Flow / 10s" in item.value.columns)
+    )
+
+    assert machine_heading < table < result_heading
+    assert rendered[table][1] != "Column"
+    assert list(rendered[table][0].value.columns) == [
+        "Máy", "Hành vi", "Đã gửi", "Flow / 10s", "Flow/s", "Cổng mồi",
+        "MLlib kết luận", "Điểm nghi ngờ", "Đối chiếu",
+    ]
 
 
 def test_load_demo_status_follows_latest_pointer(tmp_path: Path) -> None:

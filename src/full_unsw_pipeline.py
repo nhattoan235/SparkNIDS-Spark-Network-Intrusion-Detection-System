@@ -35,6 +35,8 @@ from src.preprocess import clean_dataframe
 from src.spark_session import PROJECT_ROOT, create_spark_session, load_config
 from src.unsw_nb15_schema import EXPECTED_COLUMNS
 
+PIPELINE_STEP_COUNT = 8
+
 
 def confusion_counts(predictions: DataFrame) -> dict[str, int]:
     """Return the four confusion-matrix counts without collecting prediction rows."""
@@ -144,6 +146,19 @@ def _set_run_state(root: Path, run_dir: Path, run: dict[str, Any], state: str) -
     )
 
 
+def _update_pipeline_progress(
+    root: Path, run_dir: Path, run: dict[str, Any], *, completed_steps: int, current_step: str
+) -> None:
+    if not 0 <= completed_steps <= PIPELINE_STEP_COUNT:
+        raise ValueError(f"completed_steps must be between 0 and {PIPELINE_STEP_COUNT}.")
+    run["progress"] = {
+        "completed_steps": completed_steps,
+        "total_steps": PIPELINE_STEP_COUNT,
+        "current_step": current_step,
+    }
+    _set_run_state(root, run_dir, run, str(run["status"]))
+
+
 def _label_distribution(dataframe: DataFrame) -> dict[str, int]:
     return {
         str(row["label"]): int(row["count"])
@@ -227,12 +242,20 @@ def prepare_full_dataset(
             "data_root": str(root),
             "run_dir": str(run_dir),
             "source_url": ZENODO_RECORD_URL,
+            "progress": {
+                "completed_steps": 0,
+                "total_steps": PIPELINE_STEP_COUNT,
+                "current_step": "Kiểm tra checksum của 4 CSV đầu vào",
+            },
         }
         _set_run_state(root, run_dir, run, "preparing")
         spark = None
         try:
             source_manifest = audit_sources(source_dir, expected_metadata=ZENODO_FILE_METADATA)
             run["source_manifest"] = source_manifest
+            _update_pipeline_progress(
+                root, run_dir, run, completed_steps=1, current_step="Spark đọc CSV và ghi Bronze Parquet"
+            )
             full_settings = config.get("full_unsw", {})
             expected_rows = int(full_settings.get("expected_rows", 0))
             published_rows = int(full_settings.get("published_rows", 0))
@@ -254,6 +277,9 @@ def prepare_full_dataset(
             if quality_before["invalid_label_rows"]:
                 raise ValueError(f"Found {quality_before['invalid_label_rows']:,} rows with invalid binary labels.")
 
+            _update_pipeline_progress(
+                root, run_dir, run, completed_steps=2, current_step="Làm sạch dữ liệu và ghi Silver Parquet"
+            )
             conflicting = (
                 bronze.groupBy("flow_fingerprint")
                 .agg(F.countDistinct("label").alias("_labels"))
@@ -273,11 +299,19 @@ def prepare_full_dataset(
             if quality_after["conflicting_fingerprint_groups"]:
                 raise ValueError("Conflicting flow labels remain after full-data cleaning.")
 
+            _update_pipeline_progress(
+                root, run_dir, run, completed_steps=3, current_step="Chia train, validation và test"
+            )
             splits = _save_splits(spark, silver, run_dir, seed=int(config["project"]["seed"]))
             run.update(
                 {
                     "phase": "prepare",
                     "status": "prepared",
+                    "progress": {
+                        "completed_steps": 4,
+                        "total_steps": PIPELINE_STEP_COUNT,
+                        "current_step": "Dữ liệu đã sẵn sàng; bước tiếp theo là huấn luyện MLlib",
+                    },
                     "spark_version": spark.version,
                     "spark_master": spark.sparkContext.master,
                     "expected_source_rows_for_verified_mirror": expected_rows or None,
@@ -347,6 +381,9 @@ def train_and_evaluate_full_data(
         spark = _spark_for_full_data(config, root, "unsw-nb15-full-mllib")
         run["phase"] = "train"
         _set_run_state(root, run_dir, run, "training")
+        _update_pipeline_progress(
+            root, run_dir, run, completed_steps=4, current_step="MLlib huấn luyện Logistic Regression trên train"
+        )
         try:
             model_config = config.get("full_unsw", {})
             training = spark.read.parquet(str(run_dir / "splits" / "train"))
@@ -368,6 +405,9 @@ def train_and_evaluate_full_data(
 
             model_path = run_dir / "model" / "pipeline"
             pipeline_model.write().save(str(model_path))
+            _update_pipeline_progress(
+                root, run_dir, run, completed_steps=5, current_step="Chọn ngưỡng trên validation"
+            )
             validation_predictions = pipeline_model.transform(validation).cache()
             validation_rows = validation_predictions.count()
             if validation_rows != run["splits"]["validation"]["rows"]:
@@ -397,6 +437,9 @@ def train_and_evaluate_full_data(
             }
             _write_json_atomic(run_dir / "model" / "model_lock.json", locked)
 
+            _update_pipeline_progress(
+                root, run_dir, run, completed_steps=6, current_step="Chấm toàn bộ tập test độc lập"
+            )
             test = spark.read.parquet(str(run_dir / "splits" / "test"))
             test_count = run["splits"]["test"]["rows"]
             score_group = f"{run['run_id']}-score"
@@ -440,6 +483,14 @@ def train_and_evaluate_full_data(
                 scored.unpersist()
             score_seconds = time.perf_counter() - score_started
             test_evidence = _spark_evidence(spark, score_group)
+            _update_pipeline_progress(
+                root, run_dir, run, completed_steps=7, current_step="Lưu model, báo cáo và bằng chứng Spark"
+            )
+            run["progress"] = {
+                "completed_steps": PIPELINE_STEP_COUNT,
+                "total_steps": PIPELINE_STEP_COUNT,
+                "current_step": "Pipeline đã hoàn thành",
+            }
             report = {
                 **run,
                 "status": "succeeded",

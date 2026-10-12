@@ -18,8 +18,18 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from dashboard.live_lab_controller import SENDER_IDS, LiveLabController
-from dashboard.live_view import TruthIndex, network_svg, read_json, render_scale_chart, stream_feedback
+from dashboard.live_view import (
+    TruthIndex,
+    network_svg,
+    read_json,
+    remember_spark_batch,
+    render_scale_chart,
+    spark_throughput_rows,
+    stream_feedback,
+    window_count_explanation,
+)
 from dashboard.styles import inject_styles
+from dashboard.ui import metric_cards_html
 from lab.generator import LIVE_LABELS, LIVE_NAMES, LIVE_RATES
 from src.lab_window_model import MODEL_FEATURES
 
@@ -71,7 +81,7 @@ st.markdown(
     'sau đó MLlib chấm điểm để phát hiện hành vi đáng ngờ.</p>',
     unsafe_allow_html=True,
 )
-st.caption("15 máy gửi · 1 máy chủ nhận · chạy trong mạng Docker trên máy này.")
+st.caption("Traffic = các kết nối mạng do 15 máy Docker gửi; mỗi kết nối được ghi thành một flow. Demo chạy trong mạng Docker nội bộ.")
 
 model_dir = ROOT / "models/live_lab/window_pipeline"
 metrics_path = ROOT / "models/live_lab/window_metrics.json"
@@ -238,6 +248,9 @@ def render_console():
                 {"checked": False, "outcome": "Tạm tính", "actual": None})
             for actor, row in latest.items()
         }
+        windows_by_actor = Counter(row.get("actor_id") for row in rows)
+        windows_per_machine = next(iter(windows_by_actor.values()), 0) if len(set(windows_by_actor.values())) <= 1 else 0
+        window_summary = window_count_explanation(len(rows), len(manifest["senders"]), windows_per_machine)
         predicted_attack = sum(int(row["prediction"]) == 1 for row in latest.values())
         checked_count = sum(outcomes.values())
         provisional = len(rows) - checked_count
@@ -249,7 +262,7 @@ def render_console():
         if manifest.get("status") == "completed":
             if rows and checked_count == len(rows):
                 st.success(
-                    f"Hoàn tất: Spark đã kiểm tra {checked_count} khoảng 10 giây — "
+                    f"Hoàn tất: Spark đã đối chiếu {checked_count} lượt máy–10 giây — "
                     f"bắt đúng {outcomes.get('Bắt đúng', 0)}, bỏ sót {outcomes.get('Bỏ sót', 0)}, "
                     f"báo nhầm {outcomes.get('Báo nhầm', 0)}."
                 )
@@ -266,14 +279,48 @@ def render_console():
             first.metric("Máy đã gửi dữ liệu", f"{sum(int(row.get('sent', 0)) > 0 for row in manifest['senders'])}/15")
         second.metric("Kết nối máy chủ nhận", f"{received:,}")
         third.metric("Máy Spark nghi ngờ · 10 giây gần nhất", predicted_attack)
-        fourth.metric("Khoảng 10 giây đã kiểm tra", f"{checked_count}/{len(rows)}")
+        fourth.metric("Lượt máy–10 giây đã đối chiếu", f"{checked_count}/{len(rows)}")
         st.caption(f"Mã lượt {experiment_id} · Spark {stream_label}. Mỗi khoảng tương ứng một máy trong 10 giây.")
+        st.caption(window_summary)
+
+        st.markdown("#### Spark xử lý được bao nhiêu flow mỗi giây?")
+        batch_history = list(progress.get("recent_batches", []))
+        if not batch_history:
+            history_key = f"spark_throughput_{experiment_id}"
+            batch_history = st.session_state.setdefault(history_key, [])
+            remember_spark_batch(batch_history, {
+                "batch_id": progress.get("stream_batch_id", progress.get("batch_id", 0)),
+                "input_rows": progress.get("input_rows", 0),
+                "batch_seconds": progress.get("batch_seconds", 0),
+            })
+        measured_batches = spark_throughput_rows(batch_history)
+        if measured_batches:
+            latest_batch = measured_batches[-1]
+            rate_col, chart_col = st.columns([1, 3])
+            with rate_col:
+                st.markdown(metric_cards_html([
+                    ("Lô gần nhất có dữ liệu", f"{latest_batch['Flow/giây']:,.0f} flow/s", "neutral")
+                ], columns=1), unsafe_allow_html=True)
+            with chart_col:
+                st.line_chart(
+                    pd.DataFrame(measured_batches),
+                    x="Lô Spark",
+                    y="Flow/giây",
+                    x_label="Các lô dữ liệu Spark xử lý",
+                    y_label="Flow mỗi giây",
+                    height=250,
+                )
+            st.caption(
+                f"Lô {latest_batch['Lô Spark']}: {latest_batch['Flow trong lô']:,} flow ÷ "
+                f"{latest_batch['Thời gian xử lý (giây)']:.2f} giây. Flow ở đây là một kết nối đã ghi nhận."
+            )
+        else:
+            st.caption("Chưa có lô chứa flow để đo tốc độ; lô rỗng không được tính là 0 flow/giây.")
+
         if progress.get("error"):
             st.error(f"Spark stream: {progress['error']}")
         elif not stream_fresh:
             st.info(stream_message)
-        elif progress.get("batch_seconds"):
-            st.caption(f"Spark vừa xử lý {progress.get('input_rows', 0)} kết nối trong {progress['batch_seconds']:.2f} giây.")
 
         display = []
         for index, sender in enumerate(manifest["senders"]):
@@ -283,46 +330,81 @@ def render_console():
             profile = sender.get("profile", "normal")
             if result:
                 is_final = truth_result.get("checked", False)
-                outcome = truth_result.get("outcome", "Tạm tính · còn chờ dữ liệu")
+                outcome = truth_result.get("outcome", "Chờ") if is_final else "Chờ"
+                outcome = {
+                    "Bình thường đúng": "Nhận đúng",
+                    "Chờ đủ dữ liệu đối chiếu": "Chờ",
+                }.get(outcome, outcome)
                 decision = "NGHI NGỜ" if result["prediction"] else "BÌNH THƯỜNG"
-                if not is_final:
-                    decision += " · TẠM TÍNH"
-                display.append({"Máy": names[actor], "Hành vi gửi": LIVE_NAMES.get(profile, profile),
-                    "Đã gửi": sender.get("sent", 0), "Kết nối / 10 giây": int(result["flow_count"]),
-                    "Kết nối / giây": round(float(result["flow_rate"]), 2),
-                    "Tỷ lệ cổng quét": f"{float(result['port_scan_ratio']):.0%}",
-                    "MLlib dự đoán": decision, "Điểm tấn công": round(float(result["attack_probability"]), 3),
-                    "So với thực tế": outcome})
+                display.append({"Máy": names[actor], "Hành vi": {
+                    "Truy cập thường": "Thường", "Truy cập nhanh hợp lệ": "Web nhanh",
+                    "Quét nhiều cổng": "Quét cổng", "Quét cổng chậm": "Quét chậm",
+                    "Gửi dồn": "Gửi dồn", "Gửi dồn ngắt quãng": "Gửi ngắt quãng",
+                }.get(LIVE_NAMES.get(profile, profile), profile),
+                    "Đã gửi": sender.get("sent", 0), "Flow / 10s": int(result["flow_count"]),
+                    "Flow/s": round(float(result["flow_rate"]), 2),
+                    "Cổng mồi": f"{float(result['port_scan_ratio']):.0%}",
+                    "MLlib kết luận": decision, "Điểm nghi ngờ": round(float(result["attack_probability"]), 3),
+                    "Đối chiếu": outcome})
             else:
-                display.append({"Máy": names[actor], "Hành vi gửi": LIVE_NAMES.get(profile, profile),
-                    "Đã gửi": sender.get("sent", 0), "Kết nối / 10 giây": 0, "Kết nối / giây": 0,
-                    "Tỷ lệ cổng quét": "—", "MLlib dự đoán": "Đang chờ", "Điểm tấn công": "—",
-                    "So với thực tế": "Đang chờ"})
-        col_chart, col_results = st.columns([3, 2])
-        with col_results:
-            st.markdown("#### Kết quả phát hiện")
-            a, b = st.columns(2)
-            a.metric("Bất thường bắt đúng", outcomes.get("Bắt đúng", 0))
-            b.metric("Báo nhầm", outcomes.get("Báo nhầm", 0))
-            a.metric("Bất thường bỏ sót", outcomes.get("Bỏ sót", 0))
-            b.metric("Bình thường nhận đúng", outcomes.get("Bình thường đúng", 0))
-            if provisional:
-                st.caption(f"{provisional} khoảng còn chờ Spark chốt dữ liệu.")
-        with col_chart:
-            st.markdown("#### Mỗi máy đang được Spark đánh giá thế nào?")
-            st.caption("Bảng dùng kết nối trong khoảng 10 giây gần nhất của từng máy.")
-            st.dataframe(pd.DataFrame(display), hide_index=True, width="stretch", height=410)
+                display.append({"Máy": names[actor], "Hành vi": LIVE_NAMES.get(profile, profile),
+                    "Đã gửi": sender.get("sent", 0), "Flow / 10s": 0, "Flow/s": 0,
+                    "Cổng mồi": "—", "MLlib kết luận": "Chờ Spark", "Điểm nghi ngờ": None,
+                    "Đối chiếu": "Chờ"})
+        st.markdown("#### Mỗi máy đang được Spark đánh giá thế nào?")
+        st.caption("Mỗi hàng = 1 máy trong 10 giây gần nhất. Flow/10s = số kết nối; Flow/s = tốc độ trung bình; Cổng mồi = tỷ lệ quét; Điểm = mức nghi ngờ MLlib.")
+        st.dataframe(pd.DataFrame(display), hide_index=True, width="stretch", height=410, column_config={
+            "Máy": st.column_config.TextColumn("Máy", width=55),
+            "Hành vi": st.column_config.TextColumn("Hành vi", width=125),
+            "Đã gửi": st.column_config.NumberColumn("Đã gửi", width=55),
+            "Flow / 10s": st.column_config.NumberColumn("Flow/10s", width=72, format="%d"),
+            "Flow/s": st.column_config.NumberColumn("Flow/s", width=60, format="%.2f"),
+            "Cổng mồi": st.column_config.TextColumn("Cổng mồi", width=65),
+            "MLlib kết luận": st.column_config.TextColumn("MLlib", width=88),
+            "Điểm nghi ngờ": st.column_config.NumberColumn("Điểm", width=60, format="%.3f"),
+            "Đối chiếu": st.column_config.TextColumn("Đối chiếu", width=90),
+        })
 
-        with st.expander("Biểu đồ chi tiết của một máy", expanded=False):
+        st.markdown("#### Kết quả phát hiện")
+        st.markdown(metric_cards_html([
+            ("Bắt đúng bất thường", f"{outcomes.get('Bắt đúng', 0):,}", "good"),
+            ("Bỏ sót bất thường", f"{outcomes.get('Bỏ sót', 0):,}", "bad"),
+            ("Báo nhầm", f"{outcomes.get('Báo nhầm', 0):,}", "warning"),
+            ("Bình thường nhận đúng", f"{outcomes.get('Bình thường đúng', 0):,}", "neutral"),
+        ], columns=4), unsafe_allow_html=True)
+        if provisional:
+            st.caption(f"{provisional} khoảng còn chờ Spark chốt dữ liệu.")
+
+        with st.expander("Biểu đồ: lưu lượng một máy và điểm MLlib", expanded=False):
             selected = st.session_state.get("live_actor", SENDER_IDS[0])
             series = sorted([row for row in rows if row.get("actor_id") == selected], key=lambda row: row["window_start"])
             if series:
-                frame = pd.DataFrame(series).set_index("window_start")
+                frame = pd.DataFrame([
+                    {
+                        "Cửa sổ": f"#{index + 1}",
+                        "Kết nối/giây (trung bình)": float(row["flow_rate"]),
+                        "Điểm nghi ngờ MLlib": float(row["attack_probability"]),
+                    }
+                    for index, row in enumerate(series)
+                ])
+                st.markdown(f"**{names.get(selected, 'Máy đã chọn')} · mỗi điểm = một khoảng 10 giây**")
+                st.caption("Traffic là các kết nối được máy gửi đến server. Tốc độ = số kết nối trong 10 giây chia 10.")
                 graph_left, graph_right = st.columns(2)
-                graph_left.markdown("**Traffic Spark đo:** kết nối mỗi giây")
-                graph_left.line_chart(frame["flow_rate"])
-                graph_right.markdown("**Điểm nghi ngờ của MLlib:** 0 đến 1")
-                graph_right.line_chart(frame["attack_probability"])
+                graph_left.markdown("**Máy gửi bao nhiêu kết nối?**")
+                graph_left.line_chart(
+                    frame, x="Cửa sổ", y="Kết nối/giây (trung bình)",
+                    x_label="Mốc 10 giây", y_label="Kết nối/giây", height=260,
+                )
+                graph_right.markdown("**MLlib nghi ngờ đến mức nào?**")
+                score_frame = frame[["Cửa sổ", "Điểm nghi ngờ MLlib"]].copy()
+                threshold = current_metrics.get("threshold")
+                if threshold is not None:
+                    score_frame["Ngưỡng cảnh báo"] = float(threshold)
+                graph_right.line_chart(
+                    score_frame, x="Cửa sổ", x_label="Mốc 10 giây", y_label="Điểm (0–1)", height=260,
+                )
+                if threshold is not None:
+                    st.caption(f"Điểm MLlib càng gần 1 càng đáng ngờ; cảnh báo khi đạt ngưỡng {float(threshold):.2f}.")
             else:
                 st.caption("Chưa có cửa sổ 10 giây hoàn tất.")
     else:
@@ -358,7 +440,7 @@ def latest_by_actor(rows: list[dict]) -> dict[str, dict]:
 render_console()
 
 with st.expander("Bài đo dữ liệu lớn · UNSW-NB15", expanded=False):
-    st.write("Cùng một phép tổng hợp trên 5.000, 35.000 và toàn bộ flow train; kết quả phải khớp khi đổi số partition. Spark hiện chạy local[2], nên đây là đo trên máy này, không phải cluster.")
+    st.write("Đo Spark xử lý được bao nhiêu flow trong một giây khi dữ liệu tăng. Cùng một phép tính, đổi quy mô dữ liệu và số partition.")
     scale = read_json(ROOT / "outputs/live_lab/scale.json")
     if scale.get("status") in {"downloading", "bronze", "silver", "benchmarking"}:
         st.info(f"Đang chuẩn bị và đo dữ liệu: {scale['status']}.")
@@ -367,20 +449,25 @@ with st.expander("Bài đo dữ liệu lớn · UNSW-NB15", expanded=False):
     result_path = ROOT / "outputs/benchmarks/live_lab_scale.json"
     result = read_json(result_path)
     if result.get("status") == "ok":
-        st.caption(f"UNSW-NB15: {result['total_train_rows']:,} flow · {result['input_parquet_bytes'] / 1_000_000:.1f} MB Parquet · Spark {result['spark_version']} · {result['local_master']}.")
+        st.caption(f"Dữ liệu thật: {result['total_train_rows']:,} flow train · {result['input_parquet_bytes'] / 1_000_000:.1f} MB Parquet · Spark {result['spark_version']} · {result['local_master']} trên laptop.")
+        st.caption("Cột cao hơn = Spark tổng hợp được nhiều flow mỗi giây. Đây là tốc độ phép đo trên máy này, không phải cluster.")
         points = []
         for group in result["windows"]:
             for partition in group["partition_results"]:
-                points.append({"Flow đầu vào": group["input_rows"], "Partition": str(partition["actual_partitions"]),
-                    "Trung vị xử lý (giây)": partition["query_timing"]["median_seconds"],
+                median_seconds = float(partition["query_timing"]["median_seconds"])
+                points.append({"Quy mô dữ liệu": f"{group['input_rows']:,}", "Flow đầu vào": group["input_rows"],
+                    "Partition": str(partition["actual_partitions"]),
+                    "Tốc độ Spark (flow/giây)": round(group["input_rows"] / median_seconds, 1) if median_seconds > 0 else None,
+                    "Trung vị xử lý (giây)": median_seconds,
                     "Task hoàn tất": partition["task_count"]})
         frame = pd.DataFrame(points)
+        st.markdown("#### Tốc độ xử lý theo quy mô dữ liệu")
         graph, ledger = st.columns([3, 2])
         with graph:
             render_scale_chart(st, frame)
         with ledger:
             st.dataframe(frame, hide_index=True, width="stretch")
-        st.caption("Đo cùng một phép tính, một lần làm nóng và ba lần chạy. Median giảm ảnh hưởng của lần chạy ngẫu nhiên; tốc độ còn phụ thuộc RAM, CPU, cache và partition.")
+        st.caption("Flow/giây = số flow đầu vào ÷ trung vị thời gian của 3 lần đo. Dữ liệu đã cache; không tính thời gian tải/làm sạch. Tốc độ còn phụ thuộc RAM và CPU.")
     elif scale.get("status") not in {"downloading", "bronze", "silver", "benchmarking"}:
         st.info("Chưa có bộ UNSW-NB15 trong môi trường này. Nút này tải CSV có checksum, tạo Bronze/Silver Parquet rồi đo trên dữ liệu thật.")
     if st.button("Tải dữ liệu đã kiểm chứng và chạy phép đo", disabled=scale.get("status") in {"downloading", "bronze", "silver", "benchmarking"}):

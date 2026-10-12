@@ -90,4 +90,29 @@ Chưa nên. Đây là demo/đồ án trên bộ dữ liệu có sẵn; triển k
 
 Live Lab ở `http://127.0.0.1:8501/Live_Lab` mô phỏng 15 máy Docker gửi kết nối đến máy chủ đích. Phần đó minh họa luồng gần thời gian thực: máy gửi → máy chủ ghi nhận → Spark Structured Streaming gom theo cửa sổ → Spark MLlib chấm điểm. Đây là demo trải nghiệm traffic, không thay thế kết quả full-data UNSW ở trên.
 
+### Nếu mở Live Lab: giải thích 15 máy và dấu hiệu bất thường
+
+Nói trước: “15 máy” là 15 chương trình gửi kết nối chạy trong Docker, không phải 15 máy Spark hay 15 máy thật. `Traffic` trong trang này là các kết nối gửi tới máy chủ lab; không phải nội dung gói tin lấy từ Internet.
+
+Ở chế độ **Tự chạy 3 giai đoạn**, cả 15 máy gửi bình thường trong 15 giây đầu. Từ giây 15 đến giây 60, kịch bản gán 7 máy vào nhóm hành vi bất thường; 5 máy vẫn truy cập thường và 3 máy truy cập web nhanh hợp lệ. Sau giây 60, tất cả trở về bình thường. Mã xáo mặc định là `42`; đổi mã sẽ đổi máy nhận hành vi, không đổi số lượng từng kiểu.
+
+Với mã `42`, có thể chỉ theo nhóm máy sau (Máy 01 tương ứng `sender-01`):
+
+| Máy | Hành vi trong giai đoạn giữa | Nhãn kịch bản |
+|---|---|---|
+| 01, 12 | Gửi dồn tới web | Bất thường |
+| 02 | Quét cổng mồi chậm | Bất thường |
+| 04, 05, 10 | Quét nhiều cổng mồi | Bất thường |
+| 11 | Gửi dồn ngắt quãng | Bất thường |
+| 03, 06, 13 | Truy cập web nhanh hợp lệ | Bình thường |
+| 07, 08, 09, 14, 15 | Truy cập thường | Bình thường |
+
+Quét cổng chỉ thử các cổng mồi `9001–9012` bên trong mạng Docker. Truy cập thường gửi khoảng 0,7 kết nối/giây tới cổng web `8080`; truy cập nhanh hợp lệ khoảng 4/giây; quét nhiều cổng khoảng 3/giây; gửi dồn khoảng 14/giây. Quét chậm dùng tốc độ khoảng 0,7/giây; gửi dồn ngắt quãng gửi nhanh rồi nghỉ theo chu kỳ. Đây là hành vi mô phỏng an toàn, không phải khai thác lỗ hổng.
+
+**Spark bắt bất thường bằng cách nào?** Spark Structured Streaming gom các flow theo máy trong cửa sổ 10 giây. MLlib Random Forest chỉ nhận ba số đo: số kết nối trung bình mỗi giây, tỷ lệ kết nối đi tới cổng khác `8080`, và tỷ lệ kết nối HTTP. Điểm tấn công từ 0 đến 1 đạt ngưỡng hiện tại `0,70` thì giao diện đánh dấu “nghi ngờ”. Mô hình không nhận tên hành vi hay nhãn đúng/sai làm đầu vào; các nhãn được giữ riêng để đối chiếu sau dự đoán.
+
+Khi thuyết trình ở Live Lab, chỉ bảng trước: “Mỗi hàng là một máy trong cửa sổ 10 giây gần nhất; `Kết nối/10 giây` là số flow Spark gom được, `Kết nối/giây` bằng số đó chia 10, `Tỷ lệ cổng quét` cho biết có bao nhiêu flow đi vào cổng mồi, còn `MLlib dự đoán` và `Điểm tấn công` là kết quả model.” Sau đó chỉ phần **Kết quả phát hiện** bên dưới bảng: “Bắt đúng là hành vi bất thường được nhận ra; bỏ sót là bất thường bị đánh giá bình thường; báo nhầm là bình thường bị nghi ngờ; bình thường nhận đúng là hành vi bình thường được nhận ra.” Các số này đếm những cửa sổ đã đối chiếu, không phải số máy.
+
+Giới hạn cần nói rõ: đây là phân loại các mẫu traffic được tạo trong lab. Model không đọc payload để nhận diện mã độc hay xác định tên một cuộc tấn công ngoài đời; kết quả không đại diện cho mọi mạng.
+
 Nguồn dữ liệu, checksum và quy tắc xử lý được mô tả tại [`DATASET_SOURCE.md`](DATASET_SOURCE.md).

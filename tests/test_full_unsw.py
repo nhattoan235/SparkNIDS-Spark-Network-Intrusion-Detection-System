@@ -19,7 +19,25 @@ from src.full_unsw import (
     split_full_data,
 )
 from src.spark_session import create_spark_session
-from src.full_unsw_pipeline import _json_for_console, confusion_counts, source_count_audit
+from src.full_unsw_pipeline import _json_for_console, _update_pipeline_progress, confusion_counts, source_count_audit
+
+
+def test_pipeline_progress_checkpoint_is_persisted_without_changing_run_state(tmp_path):
+    run_dir = tmp_path / "runs" / "run-1"
+    run_dir.mkdir(parents=True)
+    run = {"run_id": "run-1", "status": "preparing"}
+
+    _update_pipeline_progress(
+        tmp_path, run_dir, run, completed_steps=2, current_step="Làm sạch và ghi Silver Parquet"
+    )
+
+    stored = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    assert stored["status"] == "preparing"
+    assert stored["progress"] == {
+        "completed_steps": 2,
+        "total_steps": 8,
+        "current_step": "Làm sạch và ghi Silver Parquet",
+    }
 
 
 def test_full_pipeline_console_json_handles_legacy_windows_encoding():

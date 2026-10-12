@@ -1,5 +1,6 @@
 import pytest
 
+from src.lab_stream import _batch_measurement
 from src.lab_features import SESSION_FEATURES, aggregate_sessions
 from src.spark_session import create_spark_session
 
@@ -32,3 +33,31 @@ def test_spark_builds_one_time_aware_row_per_run_without_labels(spark):
     assert rows[0].flow_rate == pytest.approx(3.0)
     assert set(SESSION_FEATURES) <= rows[0].asDict().keys()
     assert "label" not in rows[0].asDict()
+
+
+def test_batch_measurement_reports_flow_throughput_from_spark_execution_time():
+    measured = _batch_measurement({
+        "batchId": 12,
+        "timestamp": "2026-10-12T13:45:00Z",
+        "numInputRows": 120,
+        "durationMs": {"triggerExecution": 400},
+    })
+
+    assert measured == {
+        "batch_id": 12,
+        "timestamp": "2026-10-12T13:45:00Z",
+        "input_rows": 120,
+        "duration_seconds": 0.4,
+        "flow_per_second": 300,
+    }
+
+
+def test_batch_measurement_does_not_claim_a_rate_for_an_empty_batch():
+    measured = _batch_measurement({
+        "batchId": 13,
+        "numInputRows": 0,
+        "durationMs": {"triggerExecution": 100},
+    })
+
+    assert measured["input_rows"] == 0
+    assert measured["flow_per_second"] is None

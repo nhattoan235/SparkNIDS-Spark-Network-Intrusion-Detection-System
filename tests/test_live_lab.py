@@ -188,25 +188,65 @@ def test_latest_live_experiment_can_be_recovered_after_controller_reload(tmp_pat
     assert reloaded.latest_live_experiment_id() == "a" * 12
 
 
-def test_scale_chart_uses_points_so_single_partition_runs_are_visible():
+def test_scale_chart_uses_grouped_bars_with_processing_throughput():
     calls = []
 
     class ChartSink:
-        def scatter_chart(self, frame, **options):
+        def bar_chart(self, frame, **options):
             calls.append((frame, options))
 
     frame = object()
     live_view.render_scale_chart(ChartSink(), frame)
 
     assert calls == [(frame, {
-        "x": "Flow đầu vào",
-        "y": "Trung vị xử lý (giây)",
+        "x": "Quy mô dữ liệu",
+        "y": "Tốc độ Spark (flow/giây)",
         "color": "Partition",
+        "x_label": "Số flow Spark đọc",
+        "y_label": "Flow được xử lý trong một giây",
     })]
+
+
+def test_spark_throughput_chart_uses_only_batches_with_measured_input():
+    rows = live_view.spark_throughput_rows([
+        {"batch_id": 10, "input_rows": 120, "duration_seconds": 0.4, "flow_per_second": 300},
+        {"batch_id": 11, "input_rows": 0, "duration_seconds": 0.1, "flow_per_second": None},
+    ])
+
+    assert rows == [{"Lô Spark": "#10", "Flow/giây": 300, "Flow trong lô": 120, "Thời gian xử lý (giây)": 0.4}]
+
+
+def test_spark_throughput_can_measure_the_latest_stream_status_snapshot():
+    rows = live_view.spark_throughput_rows([
+        {"batch_id": 12, "input_rows": 200, "batch_seconds": 0.5}
+    ])
+
+    assert rows == [{"Lô Spark": "#12", "Flow/giây": 400, "Flow trong lô": 200, "Thời gian xử lý (giây)": 0.5}]
+
+
+def test_remember_spark_batch_keeps_recent_nonempty_batches_once():
+    history = []
+    batch = {"batch_id": 12, "input_rows": 200, "batch_seconds": 0.5}
+
+    live_view.remember_spark_batch(history, batch)
+    live_view.remember_spark_batch(history, batch)
+    live_view.remember_spark_batch(history, {"batch_id": 13, "input_rows": 0, "batch_seconds": 0.1})
+
+    assert history == [batch]
+
+
+def test_window_count_is_explained_as_machine_time_windows_not_connections():
+    explanation = live_view.window_count_explanation(135, 15, 9)
+
+    assert explanation == "135 lần chấm = 15 máy × 9 cửa sổ/máy; mỗi cửa sổ gom kết nối trong 10 giây, không phải một kết nối."
+
+
+def test_window_count_does_not_claim_zero_windows_per_machine():
+    assert live_view.window_count_explanation(0, 15, 0) == "Chưa có cửa sổ dữ liệu 10 giây để Spark chấm."
 
 
 def test_completed_run_reports_spark_done_after_every_window_is_checked():
     assert live_view.stream_feedback("completed", False, 135, 135) == (
         "đã chốt",
-        "Spark đã xử lý xong và đối chiếu đủ 135 cửa sổ.",
+        "Spark đã đối chiếu đủ 135 cửa sổ dữ liệu (mỗi cửa sổ là 1 máy trong 10 giây).",
     )
